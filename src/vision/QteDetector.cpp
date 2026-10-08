@@ -83,6 +83,12 @@ bool AngleIndexInArc(int index, const AngleRange& arc, int steps) noexcept {
     return distance <= arc.spanDegrees;
 }
 
+bool AngleInArc(float angle, const AngleRange& arc) noexcept {
+    if (!arc.valid) return false;
+    const float distance = NormalizeDegrees(angle - arc.startDegrees);
+    return distance <= arc.spanDegrees;
+}
+
 void CloseSingleSampleGaps(std::vector<std::uint8_t>& mask, std::vector<std::uint8_t>& gapMask) {
     const int count = static_cast<int>(mask.size());
     if (count < 3) return;
@@ -210,6 +216,16 @@ QteStats QteDetector::Process(const FrameView& frame) {
     }
     stats.qteTimeMs = ElapsedMs(qteStart, QpcNow());
 
+    if (!stats.qteDetected) {
+        qteState_ = QteState::WaitingQte;
+        lockedPerfectZone_ = {};
+        triggered_ = false;
+        previousFrameHadQte_ = false;
+        std::fill(previousPerfectAngles_.begin(), previousPerfectAngles_.end(), static_cast<std::uint8_t>(0));
+    } else if (qteState_ == QteState::WaitingQte) {
+        qteState_ = QteState::DetectingPerfect;
+    }
+
     const LARGE_INTEGER roiStart = QpcNow();
     const float halfThickness = static_cast<float>(config_.ringThickness) * 0.5f;
     int whiteTotal = 0;
@@ -288,6 +304,12 @@ QteStats QteDetector::Process(const FrameView& frame) {
         stats.perfectZone = {};
     }
 
+    // Preserve the first reliable perfect arc for the entire QTE, even when the pointer covers it.
+    if (stats.qteDetected && qteState_ == QteState::DetectingPerfect && stats.perfectZone.valid) {
+        lockedPerfectZone_ = stats.perfectZone;
+        qteState_ = QteState::PerfectLocked;
+    }
+
     double directionX = 0.0;
     double directionY = 0.0;
     for (int angleIndex = 0; angleIndex < config_.angleSteps; ++angleIndex) {
@@ -321,8 +343,18 @@ QteStats QteDetector::Process(const FrameView& frame) {
             }
         }
     }
-    stats.triggerCandidate = stats.qteDetected && stats.whiteLostCount >= config_.whiteLossThreshold
-        && stats.targetRedPixelCount >= config_.redPixelsThreshold;
+    stats.perfectLocked = stats.qteDetected && lockedPerfectZone_.valid;
+    stats.lockedPerfectZone = stats.perfectLocked ? lockedPerfectZone_ : AngleRange{};
+    stats.triggerCandidate = stats.perfectLocked && stats.pointerDetected
+        && AngleInArc(stats.pointerAngleDegrees, lockedPerfectZone_);
+    if (stats.triggerCandidate && !triggered_) {
+        triggered_ = true;
+        qteState_ = QteState::Triggered;
+    } else if (triggered_ && qteState_ == QteState::Triggered) {
+        qteState_ = QteState::WaitQteEnd;
+    }
+    stats.triggered = triggered_;
+    stats.qteState = qteState_;
 
     std::copy(currentWhiteMask_.begin(), currentWhiteMask_.end(), previousWhiteMask_.begin());
     for (int i = 0; i < config_.angleSteps; ++i) {

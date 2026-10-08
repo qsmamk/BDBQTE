@@ -268,9 +268,9 @@ void LogDetectionChanges(const QteStats& stats, QteStats& previous, EventLogger&
         swprintf_s(line, L"Pointer detected at %.1f deg", stats.pointerAngleDegrees);
         logger.Write(2, line);
     }
-    if (stats.triggerCandidate && !previous.triggerCandidate) {
+    if (stats.triggered && !previous.triggered) {
         wchar_t line[160]{};
-        swprintf_s(line, L"WhiteLost=%d, RedPixelsInTarget=%d; TRIGGER CANDIDATE", stats.whiteLostCount, stats.targetRedPixelCount);
+        swprintf_s(line, L"Pointer=%.1f deg inside locked perfect arc; TRIGGERED", stats.pointerAngleDegrees);
         logger.Write(1, line);
     }
     previous = stats;
@@ -323,7 +323,7 @@ int wmain(int argc, wchar_t** argv) {
     bool detectionRunning = true;
     bool saveReferenceRequested = false;
     bool saveQteScopeRequested = false;
-    bool previousTrigger = false;
+    bool previousTriggered = false;
     QteStats latestStats{};
     QteStats previousLogStats{};
     LARGE_INTEGER lastUiUpdate = QpcNow();
@@ -439,13 +439,15 @@ int wmain(int argc, wchar_t** argv) {
                 latestStats = detector.Process(frame);
                 visionMs = latestStats.visionTimeMs;
                 LogDetectionChanges(latestStats, previousLogStats, logger);
-                if (latestStats.triggerCandidate && !previousTrigger && config.saveFrames) {
+                if (latestStats.triggered && !previousTriggered && config.saveFrames) {
                     WriteFrameSnapshot(frame, (appDirectory / L"debug_frames").wstring(), logger);
                 }
-                previousTrigger = latestStats.triggerCandidate;
+                previousTriggered = latestStats.triggered;
             } else {
                 latestStats.triggerCandidate = false;
                 latestStats.whiteLostCount = 0;
+                latestStats.triggered = false;
+                previousTriggered = false;
             }
             performance.Record(captureMs, visionMs);
 

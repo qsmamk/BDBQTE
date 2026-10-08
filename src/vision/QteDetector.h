@@ -14,6 +14,14 @@ struct AngleRange {
     float spanDegrees = 0.0f;
 };
 
+enum class QteState {
+    WaitingQte,
+    DetectingPerfect,
+    PerfectLocked,
+    Triggered,
+    WaitQteEnd,
+};
+
 struct QteStats {
     bool referenceLoaded = false;
     bool qteDetected = false;
@@ -24,6 +32,8 @@ struct QteStats {
 
     AngleRange normalZone;
     AngleRange perfectZone;
+    bool perfectLocked = false;
+    AngleRange lockedPerfectZone;
     bool pointerDetected = false;
     float pointerAngleDegrees = 0.0f;
     int whitePixelCount = 0;
@@ -31,6 +41,8 @@ struct QteStats {
     int redPixelCount = 0;
     int targetRedPixelCount = 0;
     bool triggerCandidate = false;
+    bool triggered = false;
+    QteState qteState = QteState::WaitingQte;
 };
 
 class QteDetector {
@@ -60,5 +72,8 @@ private:
     std::vector<std::uint8_t> currentWhiteMask_;
     std::vector<std::uint8_t> previousWhiteMask_;
     std::vector<std::uint8_t> previousPerfectAngles_;
+    QteState qteState_ = QteState::WaitingQte;
+    AngleRange lockedPerfectZone_;
+    bool triggered_ = false;
     bool previousFrameHadQte_ = false;
 };

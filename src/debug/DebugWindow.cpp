@@ -19,6 +19,17 @@ std::wstring DegreesText(const AngleRange& arc) {
     return text.str();
 }
 
+const wchar_t* QteStateText(QteState state) noexcept {
+    switch (state) {
+    case QteState::WaitingQte: return L"WAITING_QTE";
+    case QteState::DetectingPerfect: return L"DETECTING_PERFECT";
+    case QteState::PerfectLocked: return L"PERFECT_LOCKED";
+    case QteState::Triggered: return L"TRIGGERED";
+    case QteState::WaitQteEnd: return L"WAIT_QTE_END";
+    }
+    return L"UNKNOWN";
+}
+
 void DrawTextLine(HDC dc, int x, int y, const std::wstring& text) {
     TextOutW(dc, x, y, text.c_str(), static_cast<int>(text.size()));
 }
@@ -49,7 +60,7 @@ bool DebugWindow::Create(HINSTANCE instance, bool visible, bool showPlot, std::w
 
     window_ = CreateWindowExW(WS_EX_APPWINDOW, kWindowClass, L"QTE Vision Debugger",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        10, 10, 520, plotEnabled_ ? 690 : 520,
+        10, 10, 600, plotEnabled_ ? 750 : 600,
         nullptr, nullptr, instance, this);
     if (!window_) {
         error = L"Could not create the debug window";
@@ -181,9 +192,9 @@ void DebugWindow::Paint(HWND window) {
     DrawTextLine(dc, 18, 50, line);
     swprintf_s(line, L"Capture: %7.3f ms     ROI: %7.3f ms", performance_.captureMs, qte_.roiTimeMs);
     DrawTextLine(dc, 18, 78, line);
-    swprintf_s(line, L"QTE:     %7.3f ms     Vision: %7.3f ms", qte_.qteTimeMs, performance_.visionMs);
+    swprintf_s(line, L"QTE:     %7.3f ms     Vision Latency: %7.3f ms", qte_.qteTimeMs, performance_.visionMs);
     DrawTextLine(dc, 18, 106, line);
-    swprintf_s(line, L"Total:   %7.3f ms     Avg:    %7.3f ms", performance_.totalMs, performance_.averageMs);
+    swprintf_s(line, L"Total Latency: %7.3f ms     Avg: %7.3f ms", performance_.totalMs, performance_.averageMs);
     DrawTextLine(dc, 18, 134, line);
     swprintf_s(line, L"Max:     %7.3f ms     P95:    %7.3f ms     P99: %7.3f ms", performance_.maximumMs, performance_.p95Ms, performance_.p99Ms);
     DrawTextLine(dc, 18, 162, line);
@@ -195,27 +206,29 @@ void DebugWindow::Paint(HWND window) {
         swprintf_s(line, L"QTE: %s     Match: --", qteState);
     }
     DrawTextLine(dc, 18, 210, line);
-    DrawTextLine(dc, 18, 238, L"Normal:  " + DegreesText(qte_.normalZone));
-    DrawTextLine(dc, 18, 266, L"Perfect: " + DegreesText(qte_.perfectZone));
+    DrawTextLine(dc, 18, 238, std::wstring(L"Perfect: ") + (qte_.perfectZone.valid ? L"FOUND" : L"NOT FOUND"));
+    DrawTextLine(dc, 18, 266, std::wstring(L"Perfect Locked: ") + (qte_.perfectLocked ? L"YES" : L"NO"));
+    DrawTextLine(dc, 18, 294, L"Locked Perfect: " + DegreesText(qte_.lockedPerfectZone));
+    DrawTextLine(dc, 18, 322, std::wstring(L"Pointer: ") + (qte_.pointerDetected ? L"FOUND" : L"NOT FOUND"));
     if (qte_.pointerDetected) {
-        swprintf_s(line, L"Pointer: %6.1f deg", qte_.pointerAngleDegrees);
+        swprintf_s(line, L"Pointer Angle: %6.1f deg", qte_.pointerAngleDegrees);
     } else {
-        swprintf_s(line, L"Pointer: not detected");
+        swprintf_s(line, L"Pointer Angle: not detected");
     }
-    DrawTextLine(dc, 18, 294, line);
-    swprintf_s(line, L"White Pixels: %d     White Lost: %d", qte_.whitePixelCount, qte_.whiteLostCount);
-    DrawTextLine(dc, 18, 322, line);
-    swprintf_s(line, L"Red Pixels: %d     Target Red: %d", qte_.redPixelCount, qte_.targetRedPixelCount);
     DrawTextLine(dc, 18, 350, line);
-    DrawTextLine(dc, 18, 378, std::wstring(L"Trigger Candidate: ") + (qte_.triggerCandidate ? L"YES" : L"NO"));
+    swprintf_s(line, L"Red Score: %d", qte_.redPixelCount);
+    DrawTextLine(dc, 18, 378, line);
+    DrawTextLine(dc, 18, 406, std::wstring(L"Trigger Candidate: ") + (qte_.triggerCandidate ? L"YES" : L"NO"));
+    DrawTextLine(dc, 18, 434, std::wstring(L"Triggered: ") + (qte_.triggered ? L"YES" : L"NO"));
+    DrawTextLine(dc, 18, 462, std::wstring(L"QTE State: ") + QteStateText(qte_.qteState));
 
-    const int helpY = plotEnabled_ ? 620 : 430;
+    const int helpY = plotEnabled_ ? 660 : 530;
     DrawTextLine(dc, 18, helpY, L"F8 Start/Stop    F9 Save reference.bmp");
     DrawTextLine(dc, 18, helpY + 28, L"F10 Toggle plot    F11 Save qte_scope.bmp    ESC Exit");
 
     if (plotEnabled_) {
         const int centerX = 280;
-        const int centerY = 510;
+        const int centerY = 570;
         const int radius = 72;
         HPEN ringPen = CreatePen(PS_SOLID, 1, RGB(150, 150, 150));
         HGDIOBJ oldPen = SelectObject(dc, ringPen);
