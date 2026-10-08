@@ -3,6 +3,7 @@
 #include <Windows.h>
 
 #include <cwchar>
+#include <cwctype>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -70,6 +71,14 @@ bool LoadConfig(const std::wstring& path, AppConfig& c, std::wstring& error) {
     c.whiteLossThreshold = ReadInt(path, L"Vision", L"white_loss_threshold", c.whiteLossThreshold);
     c.redPixelsThreshold = ReadInt(path, L"Vision", L"red_pixels_threshold", c.redPixelsThreshold);
 
+    wchar_t targetKey[16]{};
+    GetPrivateProfileStringW(L"Input", L"target_key", c.targetKey.c_str(), targetKey,
+        static_cast<DWORD>(std::size(targetKey)), path.c_str());
+    c.targetKey = targetKey;
+    if (c.targetKey.size() == 1) {
+        c.targetKey[0] = static_cast<wchar_t>(towupper(c.targetKey[0]));
+    }
+
     c.showWindow = ReadBool(path, L"Debug", L"show_window", c.showWindow);
     c.saveFrames = ReadBool(path, L"Debug", L"save_frames", c.saveFrames);
     c.verbose = ReadBool(path, L"Debug", L"verbose", c.verbose);
@@ -100,8 +109,10 @@ bool LoadConfig(const std::wstring& path, AppConfig& c, std::wstring& error) {
         || c.referencePixelTolerance < 0 || c.referencePixelTolerance > 255
         || !std::isfinite(c.qteMatchThreshold) || c.qteMatchThreshold < 0.0f || c.qteMatchThreshold > 100.0f
         || c.whiteLossThreshold < 0 || c.redPixelsThreshold < 0
+        || c.targetKey.size() != 1
+        || !((c.targetKey[0] >= L'A' && c.targetKey[0] <= L'Z') || (c.targetKey[0] >= L'0' && c.targetKey[0] <= L'9'))
         || c.logLevel < 0 || c.logLevel > 2 || c.testFrameIntervalMs < 0) {
-        error = L"One or more config.ini values are outside their supported range. Check QTE, Vision, Debug, and Test settings.";
+        error = L"One or more config.ini values are outside their supported range. Check QTE, Vision, Input, Debug, and Test settings. Input target_key must be one letter A-Z or digit 0-9.";
         return false;
     }
     return true;

@@ -43,6 +43,132 @@ std::wstring HrText(const wchar_t* action, HRESULT hr) {
     return buffer;
 }
 
+std::wstring LocalTimestampText() {
+    SYSTEMTIME time{};
+    GetLocalTime(&time);
+    wchar_t text[64]{};
+    swprintf_s(text, L"%04u-%02u-%02u %02u:%02u:%02u.%03u", time.wYear, time.wMonth, time.wDay,
+        time.wHour, time.wMinute, time.wSecond, time.wMilliseconds);
+    return text;
+}
+
+WORD TargetVirtualKey(const std::wstring& key) noexcept {
+    const wchar_t ch = key[0];
+    if (ch >= L'A' && ch <= L'Z') return static_cast<WORD>(L'A' + (ch - L'A'));
+    return static_cast<WORD>(L'0' + (ch - L'0'));
+}
+
+UINT SendTargetKey(WORD virtualKey) noexcept {
+    INPUT events[2]{};
+    events[0].type = INPUT_KEYBOARD;
+    events[0].ki.wVk = virtualKey;
+    events[1].type = INPUT_KEYBOARD;
+    events[1].ki.wVk = virtualKey;
+    events[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    const UINT sent = SendInput(2, events, sizeof(INPUT));
+    if (sent != 2) {
+        INPUT release{};
+        release.type = INPUT_KEYBOARD;
+        release.ki.wVk = virtualKey;
+        release.ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(1, &release, sizeof(INPUT));
+    }
+    return sent;
+}
+
+double NormalizeAngleDegrees(double angle) noexcept {
+    angle = std::fmod(angle, 360.0);
+    return angle < 0.0 ? angle + 360.0 : angle;
+}
+
+double ClockwiseAngleDifference(double previousAngle, double currentAngle) noexcept {
+    // PointerAngle uses mathematical coordinates (0° right, 90° up), so clockwise motion is previous-current.
+    return NormalizeAngleDegrees(previousAngle - currentAngle);
+}
+
+struct PointerMotionTracker {
+    bool previousSampleValid = false;
+    double previousAngleDegrees = 0.0;
+    LARGE_INTEGER previousFrameTimestamp{};
+    bool trackedPerfectCenterValid = false;
+    double trackedPerfectCenterAngleDegrees = 0.0;
+    bool perfectCenterAlreadyPassed = false;
+    PointerMotionDisplay display{};
+};
+
+void UpdatePointerMotion(const QteStats& stats, LARGE_INTEGER frameTimestamp, PointerMotionTracker& tracker) {
+    tracker.display = {};
+    const AngleRange& perfect = stats.lockedPerfectZone;
+    if (!stats.qteDetected) {
+        tracker = {};
+        return;
+    }
+
+    if (stats.qteDetected && perfect.valid) {
+        tracker.display.perfectCenterValid = true;
+        tracker.display.perfectStartAngleDegrees = perfect.startDegrees;
+        tracker.display.perfectEndAngleDegrees = perfect.endDegrees;
+        tracker.display.perfectCenterAngleDegrees = NormalizeAngleDegrees(
+            static_cast<double>(perfect.startDegrees) + static_cast<double>(perfect.spanDegrees) * 0.5);
+
+        if (!tracker.trackedPerfectCenterValid
+            || std::abs(tracker.trackedPerfectCenterAngleDegrees - tracker.display.perfectCenterAngleDegrees) > 0.01) {
+            tracker.trackedPerfectCenterValid = true;
+            tracker.trackedPerfectCenterAngleDegrees = tracker.display.perfectCenterAngleDegrees;
+            tracker.perfectCenterAlreadyPassed = false;
+
+            // If the first locked frame already sees the pointer beyond the center inside the arc,
+            // do not interpret the opposite-side modular difference as another full revolution.
+            if (stats.pointerDetected && stats.triggerCandidate) {
+                const double clockwisePositionFromEntry = ClockwiseAngleDifference(
+                    perfect.endDegrees, static_cast<double>(stats.pointerAngleDegrees));
+                tracker.perfectCenterAlreadyPassed = clockwisePositionFromEntry > perfect.spanDegrees * 0.5;
+            }
+        }
+        tracker.display.perfectCenterAlreadyPassed = tracker.perfectCenterAlreadyPassed;
+    }
+
+    if (!stats.pointerDetected || !std::isfinite(stats.pointerAngleDegrees)) {
+        // Require two consecutive valid pointer samples before refreshing the measured speed.
+        tracker.previousSampleValid = false;
+        return;
+    }
+
+    if (tracker.previousSampleValid && frameTimestamp.QuadPart > tracker.previousFrameTimestamp.QuadPart) {
+        const double elapsedMs = QpcMilliseconds(tracker.previousFrameTimestamp, frameTimestamp);
+        if (elapsedMs > 0.0) {
+            const double clockwiseDelta = ClockwiseAngleDifference(
+                tracker.previousAngleDegrees, static_cast<double>(stats.pointerAngleDegrees));
+            tracker.display.angularVelocityDegreesPerMs = clockwiseDelta / elapsedMs;
+            tracker.display.angularVelocityValid = true;
+            if (tracker.display.perfectCenterValid) {
+                const double clockwiseDistanceFromPreviousToCenter = ClockwiseAngleDifference(
+                    tracker.previousAngleDegrees, tracker.display.perfectCenterAngleDegrees);
+                if (clockwiseDistanceFromPreviousToCenter < clockwiseDelta - 0.01) {
+                    tracker.perfectCenterAlreadyPassed = true;
+                }
+            }
+        }
+    }
+
+    tracker.previousAngleDegrees = static_cast<double>(stats.pointerAngleDegrees);
+    tracker.previousFrameTimestamp = frameTimestamp;
+    tracker.previousSampleValid = true;
+
+    tracker.display.perfectCenterAlreadyPassed = tracker.perfectCenterAlreadyPassed;
+    if (tracker.display.angularVelocityValid && tracker.display.angularVelocityDegreesPerMs > 0.0
+        && tracker.display.perfectCenterValid && !tracker.perfectCenterAlreadyPassed) {
+        const double clockwiseDistanceToCenter = ClockwiseAngleDifference(
+            static_cast<double>(stats.pointerAngleDegrees), tracker.display.perfectCenterAngleDegrees);
+        const double predictedTimeMs = clockwiseDistanceToCenter
+            / tracker.display.angularVelocityDegreesPerMs;
+        if (std::isfinite(predictedTimeMs) && predictedTimeMs >= 0.0) {
+            tracker.display.predictedTimeToPerfectCenterMs = predictedTimeMs;
+            tracker.display.predictedTimeValid = true;
+        }
+    }
+}
+
 void ShowFatalError(const std::wstring& message) {
     std::wcerr << L"ERROR: " << message << L"\n";
     MessageBoxW(nullptr, message.c_str(), L"QTE Vision Debugger", MB_OK | MB_ICONERROR);
@@ -81,6 +207,29 @@ private:
     int level_ = 0;
     std::wofstream file_;
 };
+
+void LogPerfectEntryMeasurement(const QteStats& stats, const PointerMotionDisplay& motion, EventLogger& logger) {
+    wchar_t line[320]{};
+    if (motion.perfectCenterValid && motion.angularVelocityValid && motion.perfectCenterAlreadyPassed) {
+        swprintf_s(line, L"Perfect entry telemetry: PointerAngle=%.1f deg, PerfectCenter=%.1f deg, AngularVelocity=%.5f deg/ms, PredictedTimeToCenter=ALREADY_PASSED",
+            stats.pointerAngleDegrees, motion.perfectCenterAngleDegrees,
+            motion.angularVelocityDegreesPerMs);
+    } else if (motion.perfectCenterValid && motion.angularVelocityValid && motion.predictedTimeValid) {
+        swprintf_s(line, L"Perfect entry telemetry: PointerAngle=%.1f deg, PerfectCenter=%.1f deg, AngularVelocity=%.5f deg/ms, PredictedTimeToCenter=%.2f ms",
+            stats.pointerAngleDegrees, motion.perfectCenterAngleDegrees,
+            motion.angularVelocityDegreesPerMs, motion.predictedTimeToPerfectCenterMs);
+    } else if (motion.perfectCenterValid && motion.angularVelocityValid) {
+        swprintf_s(line, L"Perfect entry telemetry: PointerAngle=%.1f deg, PerfectCenter=%.1f deg, AngularVelocity=%.5f deg/ms, PredictedTimeToCenter=N/A",
+            stats.pointerAngleDegrees, motion.perfectCenterAngleDegrees, motion.angularVelocityDegreesPerMs);
+    } else if (motion.perfectCenterValid) {
+        swprintf_s(line, L"Perfect entry telemetry: PointerAngle=%.1f deg, PerfectCenter=%.1f deg, AngularVelocity=N/A, PredictedTimeToCenter=N/A",
+            stats.pointerAngleDegrees, motion.perfectCenterAngleDegrees);
+    } else {
+        swprintf_s(line, L"Perfect entry telemetry: PointerAngle=%.1f deg, PerfectCenter=N/A, AngularVelocity=N/A, PredictedTimeToCenter=N/A",
+            stats.pointerAngleDegrees);
+    }
+    logger.Write(1, line);
+}
 
 class PerformanceTracker {
 public:
@@ -298,8 +447,10 @@ int wmain(int argc, wchar_t** argv) {
     const fs::path appDirectory = fs::path(configPath).parent_path();
     const int effectiveLogLevel = config.verbose ? 2 : config.logLevel;
     EventLogger logger(effectiveLogLevel, appDirectory / L"qtevision.log");
-    logger.Write(1, L"QTE Vision Debugger starting; Phase 1 has visual detection only");
+    logger.Write(1, L"QTE Vision Debugger starting; Phase 2 optional keyboard input (default OFF)");
     logger.Write(1, L"Config: " + configPath);
+    logger.Write(1, L"Target key: " + config.targetKey);
+    const WORD targetVirtualKey = TargetVirtualKey(config.targetKey);
 
     QteDetector detector(config);
     const std::wstring referencePath = (appDirectory / L"reference.bmp").wstring();
@@ -323,9 +474,10 @@ int wmain(int argc, wchar_t** argv) {
     bool detectionRunning = true;
     bool saveReferenceRequested = false;
     bool saveQteScopeRequested = false;
-    bool previousTriggered = false;
     QteStats latestStats{};
     QteStats previousLogStats{};
+    InputDisplay inputDisplay{};
+    PointerMotionTracker pointerMotionTracker{};
     LARGE_INTEGER lastUiUpdate = QpcNow();
     int validatedWidth = 0;
     int validatedHeight = 0;
@@ -360,6 +512,22 @@ int wmain(int argc, wchar_t** argv) {
         if (window.ConsumeF9()) saveReferenceRequested = true;
         if (window.ConsumeF10()) logger.Write(2, window.PlotEnabled() ? L"Ring plot enabled" : L"Ring plot hidden");
         if (window.ConsumeF11()) saveQteScopeRequested = true;
+        if (window.ConsumeF7()) {
+            inputDisplay.autoInputEnabled = !inputDisplay.autoInputEnabled;
+            logger.Write(1, inputDisplay.autoInputEnabled ? L"AUTO INPUT: ON" : L"AUTO INPUT: OFF");
+        }
+        if (window.ConsumeF12()) {
+            const std::wstring testTimestamp = LocalTimestampText();
+            const UINT sent = SendTargetKey(targetVirtualKey);
+            if (sent == 2) {
+                inputDisplay.testInputResult = L"SENT " + config.targetKey + L" at " + testTimestamp;
+                logger.Write(1, L"TEST INPUT sent target key " + config.targetKey + L" at " + testTimestamp);
+            } else {
+                inputDisplay.testInputResult = L"FAILED " + config.targetKey + L" at " + testTimestamp;
+                logger.Write(1, L"TEST INPUT failed for target key " + config.targetKey
+                    + L" (SendInput inserted " + std::to_wstring(sent) + L" of 2 events)");
+            }
+        }
 
         FrameView frame{};
         double captureMs = 0.0;
@@ -404,6 +572,7 @@ int wmain(int argc, wchar_t** argv) {
         }
 
         if (haveFrame) {
+            const LARGE_INTEGER frameTimestamp = QpcNow();
             if (frame.width != validatedWidth || frame.height != validatedHeight) {
                 if (!detector.ValidateFrame(frame, error)) {
                     ShowFatalError(error);
@@ -438,22 +607,53 @@ int wmain(int argc, wchar_t** argv) {
             if (detectionRunning) {
                 latestStats = detector.Process(frame);
                 visionMs = latestStats.visionTimeMs;
+                const bool enteredPerfect = latestStats.triggerCandidate && !previousLogStats.triggerCandidate;
                 LogDetectionChanges(latestStats, previousLogStats, logger);
-                if (latestStats.triggered && !previousTriggered && config.saveFrames) {
+                if (latestStats.qteState == QteState::Triggered) {
+                    const LARGE_INTEGER triggerQpc = QpcNow();
+                    inputDisplay.triggerTimestamp = LocalTimestampText();
+                    inputDisplay.inputTimestamp = L"--";
+                    inputDisplay.inputLatencyMs = -1.0;
+                    inputDisplay.inputSent = false;
+                    if (inputDisplay.autoInputEnabled) {
+                        const UINT sent = SendTargetKey(targetVirtualKey);
+                        if (sent == 2) {
+                            const LARGE_INTEGER inputQpc = QpcNow();
+                            inputDisplay.inputSent = true;
+                            ++inputDisplay.inputCount;
+                            inputDisplay.inputTimestamp = LocalTimestampText();
+                            inputDisplay.inputLatencyMs = QpcMilliseconds(triggerQpc, inputQpc);
+                            inputDisplay.inputResult = L"SENT";
+                            logger.Write(1, L"AUTO INPUT sent target key " + config.targetKey
+                                + L" at " + inputDisplay.inputTimestamp + L"; latency="
+                                + std::to_wstring(inputDisplay.inputLatencyMs) + L" ms");
+                        } else {
+                            inputDisplay.inputResult = L"SEND FAILED";
+                            logger.Write(1, L"AUTO INPUT failed for target key " + config.targetKey
+                                + L" (SendInput inserted " + std::to_wstring(sent) + L" of 2 events)");
+                        }
+                    } else {
+                        inputDisplay.inputResult = L"AUTO INPUT OFF";
+                    }
+                }
+                if (latestStats.qteState == QteState::Triggered && config.saveFrames) {
                     WriteFrameSnapshot(frame, (appDirectory / L"debug_frames").wstring(), logger);
                 }
-                previousTriggered = latestStats.triggered;
+                UpdatePointerMotion(latestStats, frameTimestamp, pointerMotionTracker);
+                if (enteredPerfect) {
+                    LogPerfectEntryMeasurement(latestStats, pointerMotionTracker.display, logger);
+                }
             } else {
                 latestStats.triggerCandidate = false;
                 latestStats.whiteLostCount = 0;
                 latestStats.triggered = false;
-                previousTriggered = false;
             }
             performance.Record(captureMs, visionMs);
 
             LARGE_INTEGER now = QpcNow();
             if (QpcMilliseconds(lastUiUpdate, now) >= 100.0) {
-                window.Update(latestStats, performance.Get(detectionRunning));
+                window.Update(latestStats, performance.Get(detectionRunning), inputDisplay,
+                    pointerMotionTracker.display);
                 lastUiUpdate = now;
             }
             if (!config.testMode) capture.EndFrame();

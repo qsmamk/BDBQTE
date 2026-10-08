@@ -10,6 +10,8 @@ constexpr int kHotkeyF8 = 1;
 constexpr int kHotkeyF9 = 2;
 constexpr int kHotkeyF10 = 3;
 constexpr int kHotkeyF11 = 4;
+constexpr int kHotkeyF7 = 5;
+constexpr int kHotkeyF12 = 6;
 
 std::wstring DegreesText(const AngleRange& arc) {
     if (!arc.valid) return L"not detected";
@@ -60,7 +62,7 @@ bool DebugWindow::Create(HINSTANCE instance, bool visible, bool showPlot, std::w
 
     window_ = CreateWindowExW(WS_EX_APPWINDOW, kWindowClass, L"QTE Vision Debugger",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        10, 10, 600, plotEnabled_ ? 750 : 600,
+        10, 10, 1020, 850,
         nullptr, nullptr, instance, this);
     if (!window_) {
         error = L"Could not create the debug window";
@@ -78,7 +80,10 @@ bool DebugWindow::Create(HINSTANCE instance, bool visible, bool showPlot, std::w
     const bool f9Registered = RegisterHotKey(window_, kHotkeyF9, MOD_NOREPEAT, VK_F9) != FALSE;
     const bool f10Registered = RegisterHotKey(window_, kHotkeyF10, MOD_NOREPEAT, VK_F10) != FALSE;
     const bool f11Registered = RegisterHotKey(window_, kHotkeyF11, MOD_NOREPEAT, VK_F11) != FALSE;
-    globalHotkeysAvailable_ = f8Registered && f9Registered && f10Registered && f11Registered;
+    const bool f7Registered = RegisterHotKey(window_, kHotkeyF7, MOD_NOREPEAT, VK_F7) != FALSE;
+    const bool f12Registered = RegisterHotKey(window_, kHotkeyF12, MOD_NOREPEAT, VK_F12) != FALSE;
+    globalHotkeysAvailable_ = f8Registered && f9Registered && f10Registered && f11Registered
+        && f7Registered && f12Registered;
     if (!f8Registered) {
         OutputDebugStringW(L"F8 global hotkey could not be registered; focus the debug window to use it.\n");
     }
@@ -91,12 +96,21 @@ bool DebugWindow::Create(HINSTANCE instance, bool visible, bool showPlot, std::w
     if (!f11Registered) {
         OutputDebugStringW(L"F11 global hotkey could not be registered; focus the debug window to use it.\n");
     }
+    if (!f7Registered) {
+        OutputDebugStringW(L"F7 global hotkey could not be registered; focus the debug window to use it.\n");
+    }
+    if (!f12Registered) {
+        OutputDebugStringW(L"F12 global hotkey could not be registered; focus the debug window to use it.\n");
+    }
     return true;
 }
 
-void DebugWindow::Update(const QteStats& qte, const PerformanceDisplay& performance) {
+void DebugWindow::Update(const QteStats& qte, const PerformanceDisplay& performance, const InputDisplay& input,
+    const PointerMotionDisplay& pointerMotion) {
     qte_ = qte;
     performance_ = performance;
+    input_ = input;
+    pointerMotion_ = pointerMotion;
     if (window_) InvalidateRect(window_, nullptr, FALSE);
 }
 
@@ -116,6 +130,8 @@ bool DebugWindow::ConsumeF8() noexcept { const bool result = f8Pressed_; f8Press
 bool DebugWindow::ConsumeF9() noexcept { const bool result = f9Pressed_; f9Pressed_ = false; return result; }
 bool DebugWindow::ConsumeF10() noexcept { const bool result = f10Pressed_; f10Pressed_ = false; return result; }
 bool DebugWindow::ConsumeF11() noexcept { const bool result = f11Pressed_; f11Pressed_ = false; return result; }
+bool DebugWindow::ConsumeF7() noexcept { const bool result = f7Pressed_; f7Pressed_ = false; return result; }
+bool DebugWindow::ConsumeF12() noexcept { const bool result = f12Pressed_; f12Pressed_ = false; return result; }
 
 LRESULT CALLBACK DebugWindow::WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     DebugWindow* self = reinterpret_cast<DebugWindow*>(GetWindowLongPtrW(window, GWLP_USERDATA));
@@ -134,6 +150,8 @@ LRESULT DebugWindow::HandleMessage(HWND window, UINT message, WPARAM wParam, LPA
         if (wParam == kHotkeyF9) f9Pressed_ = true;
         if (wParam == kHotkeyF10) { f10Pressed_ = true; plotEnabled_ = !plotEnabled_; }
         if (wParam == kHotkeyF11) f11Pressed_ = true;
+        if (wParam == kHotkeyF7) f7Pressed_ = true;
+        if (wParam == kHotkeyF12) f12Pressed_ = true;
         InvalidateRect(window, nullptr, FALSE);
         return 0;
     case WM_KEYDOWN:
@@ -149,6 +167,10 @@ LRESULT DebugWindow::HandleMessage(HWND window, UINT message, WPARAM wParam, LPA
             plotEnabled_ = !plotEnabled_;
         } else if (wParam == VK_F11) {
             f11Pressed_ = true;
+        } else if (wParam == VK_F7 && (lParam & (1LL << 30)) == 0) {
+            f7Pressed_ = true;
+        } else if (wParam == VK_F12 && (lParam & (1LL << 30)) == 0) {
+            f12Pressed_ = true;
         }
         return 0;
     case WM_CLOSE:
@@ -160,6 +182,8 @@ LRESULT DebugWindow::HandleMessage(HWND window, UINT message, WPARAM wParam, LPA
         UnregisterHotKey(window, kHotkeyF9);
         UnregisterHotKey(window, kHotkeyF10);
         UnregisterHotKey(window, kHotkeyF11);
+        UnregisterHotKey(window, kHotkeyF7);
+        UnregisterHotKey(window, kHotkeyF12);
         if (font_) {
             DeleteObject(font_);
             font_ = nullptr;
@@ -186,7 +210,7 @@ void DebugWindow::Paint(HWND window) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(25, 25, 25));
 
-    DrawTextLine(dc, 18, 14, L"QTE Vision Debugger - Phase 1 (visual detection only)");
+    DrawTextLine(dc, 18, 14, L"QTE Vision Debugger - Phase 2 (visual detection + optional keyboard input)");
     wchar_t line[256]{};
     swprintf_s(line, L"Detection: %s      Capture FPS: %6.1f", performance_.detectionRunning ? L"RUNNING" : L"PAUSED", performance_.captureFps);
     DrawTextLine(dc, 18, 50, line);
@@ -206,9 +230,21 @@ void DebugWindow::Paint(HWND window) {
         swprintf_s(line, L"QTE: %s     Match: --", qteState);
     }
     DrawTextLine(dc, 18, 210, line);
-    DrawTextLine(dc, 18, 238, std::wstring(L"Perfect: ") + (qte_.perfectZone.valid ? L"FOUND" : L"NOT FOUND"));
-    DrawTextLine(dc, 18, 266, std::wstring(L"Perfect Locked: ") + (qte_.perfectLocked ? L"YES" : L"NO"));
-    DrawTextLine(dc, 18, 294, L"Locked Perfect: " + DegreesText(qte_.lockedPerfectZone));
+    DrawTextLine(dc, 18, 238, std::wstring(L"Perfect: ") + (qte_.perfectZone.valid ? L"FOUND" : L"NOT FOUND")
+        + L"    Perfect Locked: " + (qte_.perfectLocked ? L"YES" : L"NO"));
+    if (pointerMotion_.perfectCenterValid) {
+        swprintf_s(line, L"Perfect Start Angle: %6.1f deg    Perfect End Angle: %6.1f deg",
+            pointerMotion_.perfectStartAngleDegrees, pointerMotion_.perfectEndAngleDegrees);
+    } else {
+        swprintf_s(line, L"Perfect Start Angle: --    Perfect End Angle: --");
+    }
+    DrawTextLine(dc, 18, 266, line);
+    if (pointerMotion_.perfectCenterValid) {
+        swprintf_s(line, L"Perfect Center Angle: %6.1f deg", pointerMotion_.perfectCenterAngleDegrees);
+    } else {
+        swprintf_s(line, L"Perfect Center Angle: --");
+    }
+    DrawTextLine(dc, 18, 294, line);
     DrawTextLine(dc, 18, 322, std::wstring(L"Pointer: ") + (qte_.pointerDetected ? L"FOUND" : L"NOT FOUND"));
     if (qte_.pointerDetected) {
         swprintf_s(line, L"Pointer Angle: %6.1f deg", qte_.pointerAngleDegrees);
@@ -216,20 +252,48 @@ void DebugWindow::Paint(HWND window) {
         swprintf_s(line, L"Pointer Angle: not detected");
     }
     DrawTextLine(dc, 18, 350, line);
-    swprintf_s(line, L"Red Score: %d", qte_.redPixelCount);
+    if (pointerMotion_.angularVelocityValid) {
+        swprintf_s(line, L"Pointer Angular Velocity: %.4f deg/ms", pointerMotion_.angularVelocityDegreesPerMs);
+    } else {
+        swprintf_s(line, L"Pointer Angular Velocity: -- deg/ms");
+    }
     DrawTextLine(dc, 18, 378, line);
-    DrawTextLine(dc, 18, 406, std::wstring(L"Trigger Candidate: ") + (qte_.triggerCandidate ? L"YES" : L"NO"));
-    DrawTextLine(dc, 18, 434, std::wstring(L"Triggered: ") + (qte_.triggered ? L"YES" : L"NO"));
-    DrawTextLine(dc, 18, 462, std::wstring(L"QTE State: ") + QteStateText(qte_.qteState));
+    if (pointerMotion_.perfectCenterAlreadyPassed) {
+        swprintf_s(line, L"Predicted Time To Perfect Center: ALREADY PASSED");
+    } else if (pointerMotion_.predictedTimeValid) {
+        swprintf_s(line, L"Predicted Time To Perfect Center: %.2f ms", pointerMotion_.predictedTimeToPerfectCenterMs);
+    } else {
+        swprintf_s(line, L"Predicted Time To Perfect Center: --");
+    }
+    DrawTextLine(dc, 18, 406, line);
+    swprintf_s(line, L"Red Score: %d", qte_.redPixelCount);
+    DrawTextLine(dc, 18, 434, line);
+    DrawTextLine(dc, 18, 462, std::wstring(L"Trigger Candidate: ") + (qte_.triggerCandidate ? L"YES" : L"NO"));
+    DrawTextLine(dc, 18, 490, std::wstring(L"Triggered: ") + (qte_.triggered ? L"YES" : L"NO"));
+    DrawTextLine(dc, 18, 518, std::wstring(L"QTE State: ") + QteStateText(qte_.qteState));
+    DrawTextLine(dc, 18, 546, std::wstring(L"AUTO INPUT: ") + (input_.autoInputEnabled ? L"ON" : L"OFF"));
+    DrawTextLine(dc, 18, 574, std::wstring(L"INPUT SENT: ") + (input_.inputSent ? L"YES" : L"NO")
+        + L"  (" + input_.inputResult + L")");
+    wchar_t inputCountLine[96]{};
+    swprintf_s(inputCountLine, L"INPUT COUNT: %llu", static_cast<unsigned long long>(input_.inputCount));
+    DrawTextLine(dc, 18, 602, inputCountLine);
+    DrawTextLine(dc, 18, 630, L"TRIGGER TIMESTAMP: " + input_.triggerTimestamp);
+    DrawTextLine(dc, 18, 658, L"INPUT TIMESTAMP:   " + input_.inputTimestamp);
+    if (input_.inputLatencyMs >= 0.0) {
+        swprintf_s(line, L"INPUT LATENCY: %.3f ms", input_.inputLatencyMs);
+    } else {
+        swprintf_s(line, L"INPUT LATENCY: --");
+    }
+    DrawTextLine(dc, 18, 686, line);
+    DrawTextLine(dc, 18, 714, L"TEST INPUT: " + input_.testInputResult);
 
-    const int helpY = plotEnabled_ ? 660 : 530;
-    DrawTextLine(dc, 18, helpY, L"F8 Start/Stop    F9 Save reference.bmp");
-    DrawTextLine(dc, 18, helpY + 28, L"F10 Toggle plot    F11 Save qte_scope.bmp    ESC Exit");
+    DrawTextLine(dc, 18, 756, L"F7 Auto Input ON/OFF    F12 Test Input (sends target key once)");
+    DrawTextLine(dc, 18, 784, L"F8 Start/Stop    F9 Save reference.bmp    F10 Toggle plot    F11 Save qte_scope.bmp    ESC Exit");
 
     if (plotEnabled_) {
-        const int centerX = 280;
-        const int centerY = 570;
-        const int radius = 72;
+        const int centerX = 800;
+        const int centerY = 430;
+        const int radius = 120;
         HPEN ringPen = CreatePen(PS_SOLID, 1, RGB(150, 150, 150));
         HGDIOBJ oldPen = SelectObject(dc, ringPen);
         HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));

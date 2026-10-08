@@ -31,6 +31,8 @@ struct AppConfig {
     int whiteLossThreshold = 4;
     int redPixelsThreshold = 2;
 
+    std::wstring targetKey = L"E";
+
     bool showWindow = true;
     bool saveFrames = false;
     bool verbose = false;

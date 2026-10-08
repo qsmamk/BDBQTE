@@ -1,6 +1,6 @@
 # QTE Vision Debugger
 
-Phase 1 is a Windows x64 visual debugger. It captures desktop frames and reports what the pixel detector sees. It does not generate game input.
+Phase 2 is a Windows x64 QTE debugger with stable visual detection and optional keyboard input. Automatic keyboard input starts disabled and must be explicitly enabled with F7.
 
 ## Project files
 
@@ -67,7 +67,17 @@ Set these values for the game's current resolution and UI scale:
 
 When the prompt is visible, press **F9**. The program saves that center rectangle as `reference.bmp` beside `config.ini` and begins showing `QTE Match`. Press **F11** to save the configured circular scope as `qte_scope.bmp` beside `config.ini`; the magenta circle marks the configured radius and the green cross marks the configured center. Compare the guide with the actual QTE ring to calibrate `center_x`, `center_y`, and `radius`. Use a reference captured while the QTE is visible. If the screen resolution or UI scale changes, adjust the ROI and save a new reference. A matching percentage above `qte_match_threshold` means the current ROI resembles the saved one; it is not an OCR result.
 
-The debugger window starts near the upper-left corner. Move it outside the ring if it covers any part of the QTE, or set `show_window=false` and use the registered function keys. **F8** pauses or resumes vision processing while frame capture continues. **F10** shows or hides the polar ring diagram. **F11** saves the configured QTE scope. **ESC** exits when the debugger window has focus. F8, F9, F10, and F11 are registered as global hotkeys; if another program already owns one, focus the debugger window and use its keyboard shortcut.
+The debugger window starts near the upper-left corner. Move it outside the ring if it covers any part of the QTE, or set `show_window=false` and use the registered function keys. **F7** toggles Auto Input; it always starts OFF after launch. **F8** pauses or resumes vision processing while frame capture continues. **F10** shows or hides the polar ring diagram. **F11** saves the configured QTE scope. **F12** sends one clearly labeled Test Input using the configured target key, even while Auto Input is OFF. **ESC** exits when the debugger window has focus. F7, F8, F9, F10, F11, and F12 are registered as global hotkeys; if another program already owns one, focus the debugger window and use its keyboard shortcut.
+
+## Phase 2: automatic input
+
+Set `[Input] target_key` in `config.ini` to one letter (`A`–`Z`) or digit (`0`–`9`). It defaults to `E`. The debugger displays this key in `qtevision.log` at startup.
+
+Auto Input always starts **OFF**. While it is OFF, the complete QTE / Perfect / Pointer state machine continues to run, but QTE triggers do not send keyboard input. Press **F7** to turn Auto Input ON or OFF. When ON, the target key is sent once only on the state transition into `TRIGGERED`; enabling Auto Input after a QTE has already triggered does not send a late key. The state machine prevents a second send during the same QTE, then arms for the next QTE after Appearance returns to NO.
+
+Press **F12** for one Test Input. This directly checks SendInput and is labeled `TEST INPUT` in the debugger and log. It is separate from QTE triggers: it does not change `Input Sent` or increment the automatic `Input Count`. `Input Count` counts successful automatic sends for this program run. Trigger and input timestamps and latency describe the latest automatic trigger; the `Input Sent` result remains visible until the next QTE trigger. A failed SendInput attempt is logged and is not retried during that QTE.
+
+The debug window shows `AUTO INPUT`, `TRIGGER CANDIDATE`, `TRIGGERED`, `INPUT SENT`, `INPUT COUNT`, `TRIGGER TIMESTAMP`, `INPUT TIMESTAMP`, `INPUT LATENCY`, and a separate `TEST INPUT` result. Use F12 first to confirm that Windows delivers the configured target key to the focused application before enabling automatic input.
 
 ## Detection overview
 
@@ -77,7 +87,8 @@ The debugger window starts near the upper-left corner. Move it outside the ring 
 - **White detection:** BGRA channels are read in the correct order. Near-white pixels must pass both a brightness threshold and a channel-balance threshold.
 - **Red detection:** Red must exceed a threshold and be brighter than both green and blue by a configurable ratio. Red samples around the ring produce the pointer angle.
 - **Target detection:** The ring is sampled at configurable angular and radial resolution. A per-frame median models any continuous white ring/background line. The hollow normal zone uses a lower density threshold; the solid perfect zone uses a separate higher threshold, and the two arcs are detected independently because the perfect block can touch or sit just beyond the hollow outline. Single-sample gaps are closed to tolerate anti-aliasing. Both arcs are recomputed from each frame, so their angle is not fixed in code.
-- **Perfect lock and QTE state:** The first valid perfect arc found while QTE Appearance is present is locked for that QTE lifetime. Pointer overlap can make the per-frame `Perfect` result disappear, while `Locked Perfect` remains available for the candidate check. `Trigger Candidate` reflects whether the detected pointer angle is inside the locked range; `Triggered` latches once per QTE. The states are `WAITING_QTE`, `DETECTING_PERFECT`, `PERFECT_LOCKED`, `TRIGGERED`, and `WAIT_QTE_END`. A QTE Appearance `NO` resets the lock and trigger state. No keyboard input is sent.
+- **Perfect lock and QTE state:** The first valid perfect arc found while QTE Appearance is present is locked for that QTE lifetime. Pointer overlap can make the per-frame `Perfect` result disappear, while `Locked Perfect` remains available for the candidate check. `Trigger Candidate` reflects whether the detected pointer angle is inside the locked range; `Triggered` latches once per QTE. The states are `WAITING_QTE`, `DETECTING_PERFECT`, `PERFECT_LOCKED`, `TRIGGERED`, and `WAIT_QTE_END`. A QTE Appearance `NO` resets the lock and trigger state.
+- **Keyboard input:** `SendInput` sends a key-down and key-up for the configured target key only when Auto Input is ON and the detector enters `TRIGGERED`. F12 is a separate one-shot SendInput check.
 - **White loss diagnostics:** White-to-nonwhite changes inside the previous frame's detected perfect arc and red samples in that arc remain visible as diagnostics. They no longer determine the candidate trigger.
 
 The small diagram is a polar summary rather than a full-resolution screenshot: green marks the detected normal arc, blue the perfect arc, and red the pointer angle. It is intended to show the algorithm's current interpretation.
@@ -100,8 +111,9 @@ The checked-in values `center_x=1278`, `center_y=708`, `radius=87`, and `ring_th
 - `[Vision] normal_density_threshold`, `normal_density_delta`, `perfect_density_threshold`, `perfect_density_delta`, `min_zone_angle_deg`, `max_zone_angle_deg`
 - `[Vision] reference_pixel_tolerance`, `qte_match_threshold`
 - `[Vision] white_loss_threshold`, `red_pixels_threshold`
+- `[Input] target_key` selects the key to send and test (one letter A-Z or digit 0-9)
 - `[Vision] angle_steps` and `radial_samples` control polar scan resolution
-- `[Debug] log_level` is 0 (quiet), 1 (state changes/candidates), or 2 (includes pointer events). `verbose=true` enables level 2. `save_frames=true` saves a full BMP when a new trigger candidate appears.
+- `[Debug] log_level` is 0 (quiet), 1 (state changes/triggers), or 2 (includes pointer events). `verbose=true` enables level 2. `save_frames=true` saves a full BMP when the state first enters `TRIGGERED`.
 
 Configuration is checked at startup. An invalid setting or a capture initialization failure is reported with an explanation and, for Windows API failures, an HRESULT.
 
@@ -117,6 +129,6 @@ Configuration is checked at startup. An invalid setting or a capture initializat
 
 If Capture Time is high, first check the graphics driver and whether another capture tool is using Desktop Duplication. If QTE Match is low during a visible prompt, tighten the center ROI and adjust `reference_pixel_tolerance`. If target zones are absent, inspect the polar diagram and tune the white thresholds and density values. Do not infer a reliable timing signal from a single QTE.
 
-## Validation before any later phase
+## Phase 2 validation
 
-Run at least **30 QTEs** across several sessions, including target zones at different angles. Save frame sequences when possible and replay them in offline mode. Record false detections, missed zones, pointer-angle stability, white-loss counts, candidate timing, and P95/P99. Adjust configuration and repeat until the visual results are consistent. Phase 1 stops here; do not add input behavior until the visual detector has been reviewed against real captures.
+Keep Auto Input OFF while checking the visual state machine. Use F12 to test SendInput independently, then enable Auto Input with F7 and verify that each QTE sends at most one target key when `TRIGGERED` first appears. Confirm that `Input Count` increments only for successful automatic sends and that the next QTE can trigger after the previous QTE ends.
