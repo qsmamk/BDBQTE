@@ -82,16 +82,31 @@ bool AngleIndexInArc(int index, const AngleRange& arc, int steps) noexcept {
     const float distance = NormalizeDegrees(angle - arc.startDegrees);
     return distance <= arc.spanDegrees;
 }
+
+void CloseSingleSampleGaps(std::vector<std::uint8_t>& mask, std::vector<std::uint8_t>& gapMask) {
+    const int count = static_cast<int>(mask.size());
+    if (count < 3) return;
+    for (int i = 0; i < count; ++i) {
+        const int previous = (i + count - 1) % count;
+        const int next = (i + 1) % count;
+        gapMask[static_cast<size_t>(i)] = mask[static_cast<size_t>(i)] == 0
+            && mask[static_cast<size_t>(previous)] != 0
+            && mask[static_cast<size_t>(next)] != 0 ? 1 : 0;
+    }
+    for (int i = 0; i < count; ++i) {
+        if (gapMask[static_cast<size_t>(i)] != 0) mask[static_cast<size_t>(i)] = 1;
+    }
+}
 }
 
 QteDetector::QteDetector(const AppConfig& config)
     : config_(config),
       whiteDensity_(static_cast<size_t>(config.angleSteps)),
-      normalArcDensities_(static_cast<size_t>(config.angleSteps)),
       whiteDensityHistogram_(static_cast<size_t>(config.radialSamples + 1)),
       redByAngle_(static_cast<size_t>(config.angleSteps)),
       normalMask_(static_cast<size_t>(config.angleSteps)),
       perfectMask_(static_cast<size_t>(config.angleSteps)),
+      gapMask_(static_cast<size_t>(config.angleSteps)),
       currentWhiteMask_(static_cast<size_t>(config.angleSteps) * static_cast<size_t>(config.radialSamples)),
       previousWhiteMask_(currentWhiteMask_.size()),
       previousPerfectAngles_(static_cast<size_t>(config.angleSteps)) {
@@ -261,50 +276,12 @@ QteStats QteDetector::Process(const FrameView& frame) {
     const float perfectCutoff = std::max(config_.perfectDensityThreshold, medianRingDensity + config_.perfectDensityDelta);
     for (int i = 0; i < config_.angleSteps; ++i) {
         normalMask_[static_cast<size_t>(i)] = whiteDensity_[static_cast<size_t>(i)] >= normalCutoff ? 1 : 0;
-        perfectMask_[static_cast<size_t>(i)] = 0;
+        perfectMask_[static_cast<size_t>(i)] = whiteDensity_[static_cast<size_t>(i)] >= perfectCutoff ? 1 : 0;
     }
+    CloseSingleSampleGaps(normalMask_, gapMask_);
+    CloseSingleSampleGaps(perfectMask_, gapMask_);
     FindLargestArc(normalMask_, config_.minZoneAngleDegrees, config_.maxZoneAngleDegrees, stats.normalZone);
-    if (stats.normalZone.valid) {
-        normalArcDensities_.clear();
-        float peakDensity = 0.0f;
-        for (int i = 0; i < config_.angleSteps; ++i) {
-            if (!AngleIndexInArc(i, stats.normalZone, config_.angleSteps)) continue;
-            const float density = whiteDensity_[static_cast<size_t>(i)];
-            normalArcDensities_.push_back(density);
-            peakDensity = std::max(peakDensity, density);
-        }
-        if (!normalArcDensities_.empty()) {
-            std::sort(normalArcDensities_.begin(), normalArcDensities_.end());
-            const float baselineDensity = normalArcDensities_[normalArcDensities_.size() / 4];
-            const float adaptiveFloor = std::max(0.30f, medianRingDensity + 0.15f);
-            const bool hasSolidSubregion = peakDensity >= adaptiveFloor
-                && peakDensity - baselineDensity >= 0.12f;
-            if (hasSolidSubregion) {
-                const float relativeCutoff = baselineDensity + (peakDensity - baselineDensity) * 0.50f;
-                const float densityCutoff = peakDensity >= perfectCutoff
-                    ? std::min(perfectCutoff, relativeCutoff) : relativeCutoff;
-                for (int i = 0; i < config_.angleSteps; ++i) {
-                    if (AngleIndexInArc(i, stats.normalZone, config_.angleSteps)
-                        && whiteDensity_[static_cast<size_t>(i)] >= densityCutoff) {
-                        perfectMask_[static_cast<size_t>(i)] = 1;
-                    }
-                }
-                // A one-sample gap can be caused by anti-aliasing at the edge of the solid region.
-                for (int i = 0; i < config_.angleSteps; ++i) {
-                    const int previous = (i + config_.angleSteps - 1) % config_.angleSteps;
-                    const int next = (i + 1) % config_.angleSteps;
-                    if (perfectMask_[static_cast<size_t>(i)] == 0
-                        && perfectMask_[static_cast<size_t>(previous)] != 0
-                        && perfectMask_[static_cast<size_t>(next)] != 0
-                        && AngleIndexInArc(i, stats.normalZone, config_.angleSteps)) {
-                        perfectMask_[static_cast<size_t>(i)] = 1;
-                    }
-                }
-                FindLargestArc(perfectMask_, std::min(config_.minZoneAngleDegrees, 0.75f),
-                    config_.maxZoneAngleDegrees, stats.perfectZone);
-            }
-        }
-    }
+    FindLargestArc(perfectMask_, config_.minZoneAngleDegrees, config_.maxZoneAngleDegrees, stats.perfectZone);
     // Center recognition anchors the ring scan to an actual QTE, avoiding UI/background noise.
     if (!stats.qteDetected) {
         stats.normalZone = {};

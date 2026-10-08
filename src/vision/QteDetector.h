@@ -52,11 +52,11 @@ private:
     CpuImage reference_;
     bool referenceLoaded_ = false;
     std::vector<float> whiteDensity_;
-    std::vector<float> normalArcDensities_;
     std::vector<int> whiteDensityHistogram_;
     std::vector<int> redByAngle_;
     std::vector<std::uint8_t> normalMask_;
     std::vector<std::uint8_t> perfectMask_;
+    std::vector<std::uint8_t> gapMask_;
     std::vector<std::uint8_t> currentWhiteMask_;
     std::vector<std::uint8_t> previousWhiteMask_;
     std::vector<std::uint8_t> previousPerfectAngles_;

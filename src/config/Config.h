@@ -5,10 +5,10 @@
 struct AppConfig {
     int monitorIndex = 0;
 
-    int centerX = 1295;
-    int centerY = 710;
-    int radius = 100;
-    int ringThickness = 22;
+    int centerX = 1278;
+    int centerY = 708;
+    int radius = 87;
+    int ringThickness = 12;
     int centerRoiX = 1275;
     int centerRoiY = 700;
     int centerRoiWidth = 12;
@@ -20,8 +20,8 @@ struct AppConfig {
     float redRatio = 1.55f;
     int angleSteps = 720;
     int radialSamples = 13;
-    float normalDensityThreshold = 0.12f;
-    float normalDensityDelta = 0.08f;
+    float normalDensityThreshold = 0.10f;
+    float normalDensityDelta = 0.04f;
     float perfectDensityThreshold = 0.62f;
     float perfectDensityDelta = 0.35f;
     float minZoneAngleDegrees = 2.0f;

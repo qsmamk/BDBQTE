@@ -76,7 +76,7 @@ The debugger window starts near the upper-left corner. Move it outside the ring 
 - **Reference match:** WIC loads `reference.bmp`; each center-ROI pixel is compared with a configurable per-channel tolerance. `QTE Match` is the percentage of pixels within tolerance.
 - **White detection:** BGRA channels are read in the correct order. Near-white pixels must pass both a brightness threshold and a channel-balance threshold.
 - **Red detection:** Red must exceed a threshold and be brighter than both green and blue by a configurable ratio. Red samples around the ring produce the pointer angle.
-- **Target detection:** The ring is sampled at configurable angular and radial resolution. A per-frame median models any continuous white ring/background line. The normal zone is detected first; the smaller, solid perfect zone is then identified as a denser subregion within it, using both configured density thresholds and the local density contrast. These arcs are recomputed from each frame, so their angle is not fixed in code.
+- **Target detection:** The ring is sampled at configurable angular and radial resolution. A per-frame median models any continuous white ring/background line. The hollow normal zone uses a lower density threshold; the solid perfect zone uses a separate higher threshold, and the two arcs are detected independently because the perfect block can touch or sit just beyond the hollow outline. Single-sample gaps are closed to tolerate anti-aliasing. Both arcs are recomputed from each frame, so their angle is not fixed in code.
 - **White loss and candidate:** White-to-nonwhite changes inside the previous frame's detected perfect arc are counted. A candidate is shown only when white loss and red pixels in that target both pass their configured thresholds. It is a visual signal only.
 
 The small diagram is a polar summary rather than a full-resolution screenshot: green marks the detected normal arc, blue the perfect arc, and red the pointer angle. It is intended to show the algorithm's current interpretation.
@@ -91,7 +91,7 @@ Set `[Test] test_mode=true` in `config.ini`, or start the program with `--test`.
 
 ## Parameters to tune
 
-The checked-in values `center_x=1295`, `center_y=710`, and `radius=100` match the current QTE layout. Adjust them to match your game capture:
+The checked-in values `center_x=1278`, `center_y=708`, `radius=87`, and `ring_thickness=12` are calibrated from the supplied QTE scope capture. Adjust them to match your game capture:
 
 - `[Capture] monitor`
 - `[QTE] center_x`, `center_y`, `radius`, `ring_thickness`, and the center ROI rectangle
