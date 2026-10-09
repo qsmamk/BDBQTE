@@ -10,7 +10,7 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Configure this project with an x64 generator.")
 endif()
 
-add_executable(QTEVisionDebugger
+add_executable(QTEVisionDebugger WIN32
     src/main.cpp
     src/capture/DxgiCapture.cpp
     src/config/Config.cpp
@@ -27,11 +27,10 @@ target_compile_definitions(QTEVisionDebugger PRIVATE
     NOMINMAX
     $<$<CONFIG:Debug>:QTE_DEBUG_BUILD>
 )
-target_compile_options(QTEVisionDebugger PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus)
+target_compile_options(QTEVisionDebugger PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus /utf-8)
 target_link_libraries(QTEVisionDebugger PRIVATE d3d11 dxgi windowscodecs ole32)
 
 configure_file(config.ini config.ini COPYONLY)
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test_frames")
 
 set_target_properties(QTEVisionDebugger PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>"
@@ -39,9 +38,8 @@ set_target_properties(QTEVisionDebugger PROPERTIES
 )
 
 add_custom_command(TARGET QTEVisionDebugger POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:QTEVisionDebugger>/test_frames"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/config.ini"
         "$<TARGET_FILE_DIR:QTEVisionDebugger>/config.ini"
-    COMMENT "Copying config.ini and preparing the offline frame folder"
+    COMMENT "Copying runtime configuration"
 )

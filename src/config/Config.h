@@ -28,21 +28,10 @@ struct AppConfig {
     float maxZoneAngleDegrees = 110.0f;
     int referencePixelTolerance = 52;
     float qteMatchThreshold = 82.0f;
-    int whiteLossThreshold = 4;
     int redPixelsThreshold = 2;
 
     std::wstring targetKey = L"E";
-
-    bool showWindow = true;
-    bool saveFrames = false;
-    bool verbose = false;
-    int logLevel = 1;
-    bool plotOverlay = true;
-
-    bool testMode = false;
-    std::wstring testFramesDirectory = L"test_frames";
-    int testFrameIntervalMs = 0;
-    bool loopTestFrames = false;
+    float triggerOffsetDegrees = 5.0f;
 };
 
 bool LoadConfig(const std::wstring& path, AppConfig& config, std::wstring& error);

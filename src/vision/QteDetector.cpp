@@ -89,6 +89,14 @@ bool AngleInArc(float angle, const AngleRange& arc) noexcept {
     return distance <= arc.spanDegrees;
 }
 
+AngleRange ShiftArcForTrigger(const AngleRange& perfect, float offsetDegrees) noexcept {
+    if (!perfect.valid) return {};
+    AngleRange trigger = perfect;
+    trigger.startDegrees = NormalizeDegrees(perfect.startDegrees + offsetDegrees);
+    trigger.endDegrees = NormalizeDegrees(trigger.startDegrees + perfect.spanDegrees);
+    return trigger;
+}
+
 void CloseSingleSampleGaps(std::vector<std::uint8_t>& mask, std::vector<std::uint8_t>& gapMask) {
     const int count = static_cast<int>(mask.size());
     if (count < 3) return;
@@ -116,6 +124,14 @@ QteDetector::QteDetector(const AppConfig& config)
       currentWhiteMask_(static_cast<size_t>(config.angleSteps) * static_cast<size_t>(config.radialSamples)),
       previousWhiteMask_(currentWhiteMask_.size()),
       previousPerfectAngles_(static_cast<size_t>(config.angleSteps)) {
+}
+
+void QteDetector::ResetState() noexcept {
+    qteState_ = QteState::WaitingQte;
+    lockedPerfectZone_ = {};
+    triggered_ = false;
+    previousFrameHadQte_ = false;
+    std::fill(previousPerfectAngles_.begin(), previousPerfectAngles_.end(), static_cast<std::uint8_t>(0));
 }
 
 bool QteDetector::LoadReference(const std::wstring& path, std::wstring& error) {
@@ -217,11 +233,7 @@ QteStats QteDetector::Process(const FrameView& frame) {
     stats.qteTimeMs = ElapsedMs(qteStart, QpcNow());
 
     if (!stats.qteDetected) {
-        qteState_ = QteState::WaitingQte;
-        lockedPerfectZone_ = {};
-        triggered_ = false;
-        previousFrameHadQte_ = false;
-        std::fill(previousPerfectAngles_.begin(), previousPerfectAngles_.end(), static_cast<std::uint8_t>(0));
+        ResetState();
     } else if (qteState_ == QteState::WaitingQte) {
         qteState_ = QteState::DetectingPerfect;
     }
@@ -345,8 +357,9 @@ QteStats QteDetector::Process(const FrameView& frame) {
     }
     stats.perfectLocked = stats.qteDetected && lockedPerfectZone_.valid;
     stats.lockedPerfectZone = stats.perfectLocked ? lockedPerfectZone_ : AngleRange{};
+    const AngleRange triggerZone = ShiftArcForTrigger(lockedPerfectZone_, config_.triggerOffsetDegrees);
     stats.triggerCandidate = stats.perfectLocked && stats.pointerDetected
-        && AngleInArc(stats.pointerAngleDegrees, lockedPerfectZone_);
+        && AngleInArc(stats.pointerAngleDegrees, triggerZone);
     if (stats.triggerCandidate && !triggered_) {
         triggered_ = true;
         qteState_ = QteState::Triggered;

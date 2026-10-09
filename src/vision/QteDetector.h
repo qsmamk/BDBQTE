@@ -53,6 +53,7 @@ public:
     bool SaveReferenceFromFrame(const FrameView& frame, const std::wstring& path, std::wstring& error);
     bool ValidateFrame(const FrameView& frame, std::wstring& error) const;
     QteStats Process(const FrameView& frame);
+    void ResetState() noexcept;
     bool ReferenceLoaded() const noexcept { return referenceLoaded_; }
     const AppConfig& Config() const noexcept { return config_; }
 
