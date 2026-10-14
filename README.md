@@ -7,7 +7,7 @@
 - 使用 Windows 64 位系统。
 - 下载并解压Releases版本QTEVisionDebugger-win-x64.zip压缩包。
 - 将 `QTEVisionDebugger.exe` 和 `config.ini` 放在同一个文件夹中。
-- 第一次运行前，请确认 `config.ini` 中的屏幕和 QTE 位置参数与自己的游戏画面相符。
+- 第一次运行，请确认 `config.ini` 中的屏幕和 QTE 位置参数与自己的游戏画面大致相符，参数配置完毕才可使用。
 
 如果你下载的是项目源码而不是已编译的程序，需要先用 Visual Studio 打开项目文件夹，选择 x64 Release 配置并生成程序。
 
