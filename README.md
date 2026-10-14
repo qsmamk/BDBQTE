@@ -1,51 +1,67 @@
-# QTE Vision
+# QTE 自动检测与按键工具
 
-QTE Vision is a Windows x64 application that detects the fixed QTE display, locks its Perfect area, tracks the red pointer, and sends the configured key once when the pointer enters the trigger area.
+本程序用于在游戏中识别固定位置的 QTE，并在判定时自动按下指定按键。请先根据自己的显示器和游戏画面调整配置，再开始使用。
 
-## Run
+## 运行准备
 
-1. Set the monitor and QTE coordinates in `config.ini`.
-2. Place `QTEVisionDebugger.exe` and `config.ini` in the same folder.
-3. While a QTE is visible, press **F8** to capture its center key prompt as `reference.bmp`.
-4. Press **F9** to save `qte_scope.bmp` and verify the configured circle.
-5. Leave the program running. Automatic input is enabled while the program is active.
+- 使用 Windows 64 位系统。
+- 将 `QTEVisionDebugger.exe` 和 `config.ini` 放在同一个文件夹中。
+- 第一次运行前，请确认 `config.ini` 中的屏幕和 QTE 位置参数与自己的游戏画面相符。
 
-Close the status window to exit.
+如果你下载的是项目源码而不是已编译的程序，需要先用 Visual Studio 打开项目文件夹，选择 x64 Release 配置并生成程序。
 
-## Hotkeys
+## 首次校准
 
-- **F7**: pause or resume capture, detection, and key input together.
-- **F8**: save the center ROI as `reference.bmp`.
-- **F9**: save the configured QTE scope as `qte_scope.bmp`.
+1. 启动程序，并进入游戏中能显示 QTE 的场景。
+2. 在 QTE 出现时按 **F8**，保存中心按键提示参考图 `reference.bmp`。之后程序用它判断 QTE 是否出现。
+3. 按 **F9** 保存当前圆形检测范围截图 `qte_scope.bmp`。打开截图，检查圆环是否与游戏里的 QTE 圆环重合。
+4. 如果圆心或圆环大小不准确，关闭或暂停程序，修改 `config.ini` 中的 `center_x`、`center_y` 和 `radius`，重新启动后再按 F9 检查。
+5. 确认参考图已加载、QTE 范围准确后，即可让程序保持运行。
 
-These are the only global function keys. If Windows cannot register one because another program owns it, focus the QTE Vision window and press the key there.
+坐标以所选屏幕左上角为原点，单位为像素。多屏幕用户还需要确认 `monitor` 选择的是显示游戏的屏幕。不同分辨率或游戏界面缩放可能需要重新校准并保存参考图。
 
-## Trigger behavior
+## 使用方法
 
-The program preserves the existing QTE appearance detection, Perfect recognition and lock, red-pointer detection, and QTE state machine. Once a Perfect area is locked, each valid pointer angle is checked against that area shifted by the fixed `trigger_offset_deg`. On the first entry, the state changes to `TRIGGERED` and the configured key is sent immediately with `SendInput`. The state machine prevents another key press during the same QTE and resets after QTE appearance disappears.
+程序运行时会持续检测 QTE。检测到并锁定完美区域后，指针进入触发范围时，程序会按下 `target_key` 指定的按键；每次 QTE 最多触发一次。
 
-The offset shifts both Perfect boundaries by the same number of degrees. For example, a Perfect range of `245° ~ 256°` with `trigger_offset_deg=5.0` produces a trigger range of `250° ~ 261°`; the visually detected and locked Perfect range is unchanged. Positive values shift the numeric angle range forward, and negative values shift it backward. Range checks normalize angles, including ranges that cross `0°/360°`.
+**F7 是程序总开关**：按下后会暂停图像检测和自动按键；再次按下可恢复。暂停期间不会处理新的 QTE。关闭程序窗口即可退出。
 
-Angles use the detector's existing convention: `0°` right, `90°` up, `180°` left, and `270°` down.
+## 快捷键
 
-## Configuration
+- **F7**：启动或暂停程序的全部功能。
+- **F8**：保存中心按键提示参考图 `reference.bmp`。
+- **F9**：保存当前 QTE 范围截图 `qte_scope.bmp`。
 
-`config.ini` contains the runtime settings:
+如果快捷键没有反应，请先确认程序正在运行；也可以点选程序窗口后再按快捷键。
 
-- `[Capture] monitor`
-- `[QTE] center_x`, `center_y`, `radius`, `ring_thickness`, and center ROI coordinates/dimensions
-- `[Vision]` color thresholds, angular sampling, recognition thresholds, reference tolerance, and QTE match threshold
-- `[Input] target_key` and `trigger_offset_deg` (`-180` through `180`; default `5.0`)
+## 配置说明
 
-`reference.bmp` and `qte_scope.bmp` are saved beside `config.ini`. The application writes concise state and input error records to `qtevision.log` and keeps the most recent 500 lines.
+配置文件为程序旁边的 `config.ini`。常用参数如下：
 
-## Build
+- `monitor`：游戏所在的屏幕编号，第一块屏幕为 `0`。
+- `center_x`、`center_y`：QTE 圆心位置。
+- `radius`：QTE 圆环半径。一般可通过 F9 保存qte范围参考图来校准。
+- `ring_thickness`：圆环检测宽度。半径与宽度的结合，是游戏中程序采集像素的区域。
+- `center_roi_x`、`center_roi_y`、`center_roi_width`、`center_roi_height`：中心按键提示参考图的截取位置和大小。一般可通过 F8 保存参考图来校准。
+- `target_key`：触发时要按下的按键，支持字母 A–Z 或数字 0–9，默认是 `E`。
+- `trigger_offset_deg`：触发角度偏移，默认是 `5.0`。正值让顺时针移动的指针更早触发，负值让它更晚触发。调整时建议从较小数值开始。
 
-Configure with a Windows x64 CMake generator and build either `Debug` or `Release`:
+- 正确配置后采集到的标准参考图请参考项目文件中的`qte_scope.bmp`和 `reference.bmp`。
 
-```powershell
-cmake -S . -B build -A x64
-cmake --build build --config Release
-```
+！！！注意！！！中心提示参考图必须在游戏中截取，不可以在保存的图片或者是视频中截取。  QTE范围参考图，可以在录制的视频或截图中截取,但是请保证截取时图片或视频覆盖为全屏。
+具体的操作方法为，运行程序，先在录制的全屏游戏视频或全屏截图，分别按F8和F9截取中心参考图和QTE范围参考图，返回文件夹中查看截取到的两张参考图，如果位置有偏差，则在`config.ini`
+文件中调整截取位置的参数，直到可以截取出标准的参考图。，此时不要修改参数，直接到游戏中，在QTE出现的瞬间，按下F8截取游戏内原像素的中心参考图。中心参考图为QTE出现的标志，
+使用视频或者图片截取会因为视频和图片的压缩原因，无法和游戏中的原像素匹配，从而导致检测不到QTE出现。
+- 识别到的完美区域为 `245°～256°`，偏移设为 `5.0` 时，程序会把触发范围移到 `250°～261°`。该参数可改变按键提前量，如果按下提前就减小，按下偏晚则增加。
 
-The executable is written to `build/bin/Release/QTEVisionDebugger.exe` (or `build/bin/Debug/QTEVisionDebugger.exe`).
+## 文件说明
+
+- `config.ini`：运行配置。
+- `reference.bmp`：按 F8 保存的中心按键提示参考图。
+- `qte_scope.bmp`：按 F9 保存的 QTE 范围检查图。
+- `qtevision.log`：程序运行记录；程序只保留最近的 500 行。
+
+`reference.bmp` 和 `qte_scope.bmp` 会保存在 `config.ini` 所在文件夹中。更换分辨率或界面缩放后，请重新检查配置并保存新的参考图。
+
+##目前bug
+程序暂停时,窗口会错误显示参考图缺失，不过仅为显示bug，不影响使用。只需要确保程序所在文件夹下有`reference.bmp`即可。
