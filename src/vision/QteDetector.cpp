@@ -149,13 +149,18 @@ bool QteDetector::LoadReference(const std::wstring& path, std::wstring& error) {
 }
 
 bool QteDetector::IsFramePointValid(const FrameView& frame, int x, int y) const noexcept {
-    return frame.pixels != nullptr && x >= 0 && y >= 0 && x < frame.width && y < frame.height;
+    const int localX = x - frame.originX;
+    const int localY = y - frame.originY;
+    return frame.pixels != nullptr && localX >= 0 && localY >= 0
+        && localX < frame.width && localY < frame.height;
 }
 
 bool QteDetector::IsCenterRoiValid(const FrameView& frame) const noexcept {
-    const auto right = static_cast<std::int64_t>(config_.centerRoiX) + config_.centerRoiWidth;
-    const auto bottom = static_cast<std::int64_t>(config_.centerRoiY) + config_.centerRoiHeight;
-    return frame.pixels != nullptr && config_.centerRoiX >= 0 && config_.centerRoiY >= 0
+    const auto left = static_cast<std::int64_t>(config_.centerRoiX) - frame.originX;
+    const auto top = static_cast<std::int64_t>(config_.centerRoiY) - frame.originY;
+    const auto right = left + config_.centerRoiWidth;
+    const auto bottom = top + config_.centerRoiHeight;
+    return frame.pixels != nullptr && left >= 0 && top >= 0
         && right <= frame.width && bottom <= frame.height;
 }
 
@@ -171,9 +176,10 @@ bool QteDetector::ValidateFrame(const FrameView& frame, std::wstring& error) con
     }
     const std::int64_t margin = static_cast<std::int64_t>(config_.radius)
         + (static_cast<std::int64_t>(config_.ringThickness) + 1) / 2 + 1;
-    if (static_cast<std::int64_t>(config_.centerX) - margin < 0 || static_cast<std::int64_t>(config_.centerY) - margin < 0
-        || static_cast<std::int64_t>(config_.centerX) + margin >= frame.width
-        || static_cast<std::int64_t>(config_.centerY) + margin >= frame.height) {
+    if (static_cast<std::int64_t>(config_.centerX) - margin < frame.originX
+        || static_cast<std::int64_t>(config_.centerY) - margin < frame.originY
+        || static_cast<std::int64_t>(config_.centerX) + margin >= static_cast<std::int64_t>(frame.originX) + frame.width
+        || static_cast<std::int64_t>(config_.centerY) + margin >= static_cast<std::int64_t>(frame.originY) + frame.height) {
         error = L"The configured ring is outside this monitor or test image. Adjust center_x, center_y, radius, or ring_thickness in config.ini.";
         return false;
     }
@@ -189,9 +195,11 @@ bool QteDetector::SaveReferenceFromFrame(const FrameView& frame, const std::wstr
     reference_.height = config_.centerRoiHeight;
     reference_.stride = reference_.width * 4;
     reference_.pixels.resize(static_cast<size_t>(reference_.stride) * static_cast<size_t>(reference_.height));
+    const int localRoiX = config_.centerRoiX - frame.originX;
+    const int localRoiY = config_.centerRoiY - frame.originY;
     for (int y = 0; y < reference_.height; ++y) {
-        const auto* source = frame.pixels + static_cast<size_t>(config_.centerRoiY + y) * static_cast<size_t>(frame.rowPitch)
-            + static_cast<size_t>(config_.centerRoiX) * 4;
+        const auto* source = frame.pixels + static_cast<size_t>(localRoiY + y) * static_cast<size_t>(frame.rowPitch)
+            + static_cast<size_t>(localRoiX) * 4;
         auto* destination = reference_.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(reference_.stride);
         std::copy_n(source, reference_.stride, destination);
     }
@@ -212,10 +220,12 @@ QteStats QteDetector::Process(const FrameView& frame) {
     if (referenceLoaded_ && IsCenterRoiValid(frame)) {
         int matchingPixels = 0;
         const int pixelCount = config_.centerRoiWidth * config_.centerRoiHeight;
+        const int localRoiX = config_.centerRoiX - frame.originX;
+        const int localRoiY = config_.centerRoiY - frame.originY;
         for (int y = 0; y < config_.centerRoiHeight; ++y) {
             const auto* currentRow = reinterpret_cast<const BgraPixel*>(frame.pixels
-                + static_cast<size_t>(config_.centerRoiY + y) * static_cast<size_t>(frame.rowPitch)
-                + static_cast<size_t>(config_.centerRoiX) * 4);
+                + static_cast<size_t>(localRoiY + y) * static_cast<size_t>(frame.rowPitch)
+                + static_cast<size_t>(localRoiX) * 4);
             const auto* referenceRow = reinterpret_cast<const BgraPixel*>(reference_.pixels.data()
                 + static_cast<size_t>(y) * static_cast<size_t>(reference_.stride));
             for (int x = 0; x < config_.centerRoiWidth; ++x) {
@@ -265,7 +275,8 @@ QteStats QteDetector::Process(const FrameView& frame) {
             bool isRed = false;
             if (IsFramePointValid(frame, x, y)) {
                 const auto* pixel = reinterpret_cast<const BgraPixel*>(frame.pixels
-                    + static_cast<size_t>(y) * static_cast<size_t>(frame.rowPitch) + static_cast<size_t>(x) * 4);
+                    + static_cast<size_t>(y - frame.originY) * static_cast<size_t>(frame.rowPitch)
+                    + static_cast<size_t>(x - frame.originX) * 4);
                 isRed = IsRedPixel(*pixel, config_.redThreshold, config_.redRatio);
                 isWhite = !isRed && IsWhitePixel(*pixel, config_.whiteThreshold, config_.whiteChannelTolerance);
                 ++validSamples;

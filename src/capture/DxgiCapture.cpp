@@ -1,5 +1,6 @@
 #include "DxgiCapture.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 
@@ -29,11 +30,16 @@ void DxgiCapture::ReleaseAll() noexcept {
     stagingWidth_ = 0;
     stagingHeight_ = 0;
     stagingFormat_ = DXGI_FORMAT_UNKNOWN;
+    sourceWidth_ = 0;
+    sourceHeight_ = 0;
+    copyRegion_ = {};
 }
 
-bool DxgiCapture::Initialize(int monitorIndex, std::wstring& error) {
+bool DxgiCapture::Initialize(int monitorIndex, std::wstring& error, const RECT* captureRegion) {
     ReleaseAll();
     monitorIndex_ = monitorIndex;
+    hasCustomCaptureRegion_ = captureRegion != nullptr;
+    desiredCaptureRegion_ = captureRegion != nullptr ? *captureRegion : RECT{};
     return CreateDeviceAndDuplication(monitorIndex, error);
 }
 
@@ -105,6 +111,8 @@ bool DxgiCapture::CreateDeviceAndDuplication(int monitorIndex, std::wstring& err
         return false;
     }
     desktopRect_ = outputDesc.DesktopCoordinates;
+    sourceWidth_ = desktopRect_.right - desktopRect_.left;
+    sourceHeight_ = desktopRect_.bottom - desktopRect_.top;
 
     hr = output_.As(&output1_);
     if (FAILED(hr)) {
@@ -117,9 +125,20 @@ bool DxgiCapture::CreateDeviceAndDuplication(int monitorIndex, std::wstring& err
         return false;
     }
 
-    const int width = desktopRect_.right - desktopRect_.left;
-    const int height = desktopRect_.bottom - desktopRect_.top;
-    return CreateStagingTexture(width, height, DXGI_FORMAT_B8G8R8A8_UNORM, error);
+    RECT fullRegion{ 0, 0, sourceWidth_, sourceHeight_ };
+    copyRegion_ = fullRegion;
+    if (hasCustomCaptureRegion_) {
+        copyRegion_.left = std::max(fullRegion.left, desiredCaptureRegion_.left);
+        copyRegion_.top = std::max(fullRegion.top, desiredCaptureRegion_.top);
+        copyRegion_.right = std::min(fullRegion.right, desiredCaptureRegion_.right);
+        copyRegion_.bottom = std::min(fullRegion.bottom, desiredCaptureRegion_.bottom);
+    }
+    if (copyRegion_.left >= copyRegion_.right || copyRegion_.top >= copyRegion_.bottom) {
+        error = L"The configured QTE capture region does not overlap the selected monitor.";
+        return false;
+    }
+    return CreateStagingTexture(copyRegion_.right - copyRegion_.left,
+        copyRegion_.bottom - copyRegion_.top, DXGI_FORMAT_B8G8R8A8_UNORM, error);
 }
 
 bool DxgiCapture::CreateStagingTexture(int width, int height, DXGI_FORMAT format, std::wstring& error) {
@@ -144,10 +163,11 @@ bool DxgiCapture::CreateStagingTexture(int width, int height, DXGI_FORMAT format
     return true;
 }
 
-CaptureStatus DxgiCapture::BeginFrame(FrameView& frame, HRESULT& result, std::wstring& error) {
+CaptureStatus DxgiCapture::BeginFrame(FrameView& frame, HRESULT& result, std::wstring& error, CaptureStage stage) {
     EndFrame();
     if (!duplication_) {
-        if (!Initialize(monitorIndex_, error)) {
+        const RECT region = desiredCaptureRegion_;
+        if (!Initialize(monitorIndex_, error, hasCustomCaptureRegion_ ? &region : nullptr)) {
             result = E_FAIL;
             return CaptureStatus::Failed;
         }
@@ -160,7 +180,8 @@ CaptureStatus DxgiCapture::BeginFrame(FrameView& frame, HRESULT& result, std::ws
         return CaptureStatus::Timeout;
     }
     if (result == DXGI_ERROR_ACCESS_LOST) {
-        if (Initialize(monitorIndex_, error)) {
+        const RECT region = desiredCaptureRegion_;
+        if (Initialize(monitorIndex_, error, hasCustomCaptureRegion_ ? &region : nullptr)) {
             return CaptureStatus::Reinitialized;
         }
         result = E_FAIL;
@@ -171,6 +192,16 @@ CaptureStatus DxgiCapture::BeginFrame(FrameView& frame, HRESULT& result, std::ws
         return CaptureStatus::Failed;
     }
 
+    if (stage == CaptureStage::AcquireOnly) {
+        result = duplication_->ReleaseFrame();
+        if (FAILED(result)) {
+            error = HResultText(L"Could not release the acquired desktop frame", result);
+            return CaptureStatus::Failed;
+        }
+        frame.desktopRect = desktopRect_;
+        return CaptureStatus::Frame;
+    }
+
     Microsoft::WRL::ComPtr<ID3D11Texture2D> acquiredTexture;
     result = resource.As(&acquiredTexture);
     if (FAILED(result)) {
@@ -178,17 +209,94 @@ CaptureStatus DxgiCapture::BeginFrame(FrameView& frame, HRESULT& result, std::ws
         error = HResultText(L"Could not access the captured D3D11 texture", result);
         return CaptureStatus::Failed;
     }
+
     D3D11_TEXTURE2D_DESC sourceDesc{};
     acquiredTexture->GetDesc(&sourceDesc);
-    if (sourceDesc.Width != static_cast<UINT>(stagingWidth_) || sourceDesc.Height != static_cast<UINT>(stagingHeight_)
-        || sourceDesc.Format != stagingFormat_) {
-        if (!CreateStagingTexture(static_cast<int>(sourceDesc.Width), static_cast<int>(sourceDesc.Height), sourceDesc.Format, error)) {
+    if (sourceDesc.Width != static_cast<UINT>(sourceWidth_) || sourceDesc.Height != static_cast<UINT>(sourceHeight_)) {
+        sourceWidth_ = static_cast<int>(sourceDesc.Width);
+        sourceHeight_ = static_cast<int>(sourceDesc.Height);
+        RECT fullRegion{ 0, 0, sourceWidth_, sourceHeight_ };
+        copyRegion_ = fullRegion;
+        if (hasCustomCaptureRegion_) {
+            copyRegion_.left = std::max(fullRegion.left, desiredCaptureRegion_.left);
+            copyRegion_.top = std::max(fullRegion.top, desiredCaptureRegion_.top);
+            copyRegion_.right = std::min(fullRegion.right, desiredCaptureRegion_.right);
+            copyRegion_.bottom = std::min(fullRegion.bottom, desiredCaptureRegion_.bottom);
+        }
+    }
+    const int requiredWidth = copyRegion_.right - copyRegion_.left;
+    const int requiredHeight = copyRegion_.bottom - copyRegion_.top;
+    if (requiredWidth <= 0 || requiredHeight <= 0) {
+        duplication_->ReleaseFrame();
+        error = L"The configured QTE capture region does not overlap the selected monitor.";
+        return CaptureStatus::Failed;
+    }
+    if (requiredWidth != stagingWidth_ || requiredHeight != stagingHeight_ || sourceDesc.Format != stagingFormat_) {
+        if (!CreateStagingTexture(requiredWidth, requiredHeight, sourceDesc.Format, error)) {
             duplication_->ReleaseFrame();
             return CaptureStatus::Failed;
         }
     }
-    context_->CopyResource(staging_.Get(), acquiredTexture.Get());
-    duplication_->ReleaseFrame();
+
+    if (stage == CaptureStage::InspectWithoutCopy) {
+        result = duplication_->ReleaseFrame();
+        if (FAILED(result)) {
+            error = HResultText(L"Could not release the acquired desktop frame", result);
+            return CaptureStatus::Failed;
+        }
+        frame.width = stagingWidth_;
+        frame.height = stagingHeight_;
+        frame.originX = copyRegion_.left;
+        frame.originY = copyRegion_.top;
+        frame.desktopRect = desktopRect_;
+        return CaptureStatus::Frame;
+    }
+
+    if (stage == CaptureStage::SmallRegionCopyWithoutReadback) {
+        const UINT copyWidth = std::min<UINT>(64, sourceDesc.Width);
+        const UINT copyHeight = std::min<UINT>(64, sourceDesc.Height);
+        const D3D11_BOX sourceBox{ 0, 0, 0, copyWidth, copyHeight, 1 };
+        context_->CopySubresourceRegion(staging_.Get(), 0, 0, 0, 0, acquiredTexture.Get(), 0, &sourceBox);
+        result = duplication_->ReleaseFrame();
+        if (FAILED(result)) {
+            error = HResultText(L"Could not release the acquired desktop frame", result);
+            return CaptureStatus::Failed;
+        }
+        frame.width = stagingWidth_;
+        frame.height = stagingHeight_;
+        frame.originX = copyRegion_.left;
+        frame.originY = copyRegion_.top;
+        frame.desktopRect = desktopRect_;
+        return CaptureStatus::Frame;
+    }
+
+    const bool fullOutputCopy = copyRegion_.left == 0 && copyRegion_.top == 0
+        && copyRegion_.right == static_cast<LONG>(sourceDesc.Width)
+        && copyRegion_.bottom == static_cast<LONG>(sourceDesc.Height)
+        && stagingWidth_ == static_cast<int>(sourceDesc.Width)
+        && stagingHeight_ == static_cast<int>(sourceDesc.Height);
+    if (fullOutputCopy) {
+        context_->CopyResource(staging_.Get(), acquiredTexture.Get());
+    } else {
+        const D3D11_BOX sourceBox{ static_cast<UINT>(copyRegion_.left), static_cast<UINT>(copyRegion_.top), 0,
+            static_cast<UINT>(copyRegion_.right), static_cast<UINT>(copyRegion_.bottom), 1 };
+        context_->CopySubresourceRegion(staging_.Get(), 0, 0, 0, 0, acquiredTexture.Get(), 0, &sourceBox);
+    }
+    result = duplication_->ReleaseFrame();
+    if (FAILED(result)) {
+        error = HResultText(L"Could not release the acquired desktop frame", result);
+        return CaptureStatus::Failed;
+    }
+
+    if (stage == CaptureStage::CopyWithoutReadback || stage == CaptureStage::CopyWithoutReadbackNoFlush) {
+        if (stage == CaptureStage::CopyWithoutReadback) context_->Flush();
+        frame.width = stagingWidth_;
+        frame.height = stagingHeight_;
+        frame.originX = copyRegion_.left;
+        frame.originY = copyRegion_.top;
+        frame.desktopRect = desktopRect_;
+        return CaptureStatus::Frame;
+    }
 
     result = context_->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &mappedResource_);
     if (FAILED(result)) {
@@ -200,6 +308,8 @@ CaptureStatus DxgiCapture::BeginFrame(FrameView& frame, HRESULT& result, std::ws
     frame.width = stagingWidth_;
     frame.height = stagingHeight_;
     frame.rowPitch = static_cast<int>(mappedResource_.RowPitch);
+    frame.originX = copyRegion_.left;
+    frame.originY = copyRegion_.top;
     frame.desktopRect = desktopRect_;
     return CaptureStatus::Frame;
 }

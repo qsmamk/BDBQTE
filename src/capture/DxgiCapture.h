@@ -12,6 +12,9 @@ struct FrameView {
     int width = 0;
     int height = 0;
     int rowPitch = 0;
+    // Pixel coordinates in the monitor output represented by pixels[0, 0].
+    int originX = 0;
+    int originY = 0;
     RECT desktopRect{};
 };
 
@@ -22,6 +25,15 @@ enum class CaptureStatus {
     Failed,
 };
 
+enum class CaptureStage {
+    Full,
+    AcquireOnly,
+    InspectWithoutCopy,
+    SmallRegionCopyWithoutReadback,
+    CopyWithoutReadback,
+    CopyWithoutReadbackNoFlush,
+};
+
 class DxgiCapture {
 public:
     DxgiCapture() = default;
@@ -29,8 +41,9 @@ public:
     DxgiCapture(const DxgiCapture&) = delete;
     DxgiCapture& operator=(const DxgiCapture&) = delete;
 
-    bool Initialize(int monitorIndex, std::wstring& error);
-    CaptureStatus BeginFrame(FrameView& frame, HRESULT& result, std::wstring& error);
+    bool Initialize(int monitorIndex, std::wstring& error, const RECT* captureRegion = nullptr);
+    CaptureStatus BeginFrame(FrameView& frame, HRESULT& result, std::wstring& error,
+        CaptureStage stage = CaptureStage::Full);
     void EndFrame() noexcept;
 
 private:
@@ -39,6 +52,11 @@ private:
     void ReleaseAll() noexcept;
 
     int monitorIndex_ = 0;
+    bool hasCustomCaptureRegion_ = false;
+    RECT desiredCaptureRegion_{};
+    RECT copyRegion_{};
+    int sourceWidth_ = 0;
+    int sourceHeight_ = 0;
     bool mapped_ = false;
     Microsoft::WRL::ComPtr<IDXGIFactory1> factory_;
     Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter_;

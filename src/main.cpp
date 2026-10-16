@@ -9,15 +9,42 @@
 #include <objbase.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
+#include <string_view>
 
 namespace fs = std::filesystem;
 
 namespace {
+CaptureStage GetCaptureStage(const wchar_t* commandLine) {
+    if (commandLine == nullptr) return CaptureStage::Full;
+    const std::wstring_view args(commandLine);
+    if (args.find(L"--capture-stage=acquire") != std::wstring_view::npos) return CaptureStage::AcquireOnly;
+    if (args.find(L"--capture-stage=inspect") != std::wstring_view::npos) return CaptureStage::InspectWithoutCopy;
+    if (args.find(L"--capture-stage=small-copy") != std::wstring_view::npos) return CaptureStage::SmallRegionCopyWithoutReadback;
+    if (args.find(L"--capture-stage=copy-no-flush") != std::wstring_view::npos) return CaptureStage::CopyWithoutReadbackNoFlush;
+    if (args.find(L"--capture-stage=copy") != std::wstring_view::npos) return CaptureStage::CopyWithoutReadback;
+    return CaptureStage::Full;
+}
+
+const wchar_t* CaptureStageName(CaptureStage stage) {
+    switch (stage) {
+    case CaptureStage::AcquireOnly: return L"Acquire and release only";
+    case CaptureStage::InspectWithoutCopy: return L"Acquire + access texture and inspect descriptor; no copy";
+    case CaptureStage::SmallRegionCopyWithoutReadback: return L"Acquire + 64x64 GPU copy; no flush or CPU readback";
+    case CaptureStage::CopyWithoutReadback: return L"Acquire, GPU copy, and flush; no CPU readback";
+    case CaptureStage::CopyWithoutReadbackNoFlush: return L"Acquire + GPU copy; no explicit flush or CPU readback";
+    case CaptureStage::Full: return L"Full capture including CPU readback";
+    }
+    return L"Unknown";
+}
+
 std::wstring HrText(const wchar_t* action, HRESULT hr) {
     wchar_t buffer[96]{};
     swprintf_s(buffer, L"%s (HRESULT = 0x%08X)", action, static_cast<unsigned int>(hr));
@@ -112,7 +139,9 @@ bool WriteQteScopeSnapshot(const FrameView& view, const AppConfig& config, const
     const int left = config.centerX - extent;
     const int top = config.centerY - extent;
     const int side = extent * 2 + 1;
-    if (left < 0 || top < 0 || left + side > view.width || top + side > view.height) {
+    const int localLeft = left - view.originX;
+    const int localTop = top - view.originY;
+    if (localLeft < 0 || localTop < 0 || localLeft + side > view.width || localTop + side > view.height) {
         error = L"Configured QTE scope is outside the captured monitor; check center_x, center_y, and radius.";
         return false;
     }
@@ -123,8 +152,8 @@ bool WriteQteScopeSnapshot(const FrameView& view, const AppConfig& config, const
     image.stride = image.width * 4;
     image.pixels.resize(static_cast<size_t>(image.stride) * static_cast<size_t>(image.height));
     for (int y = 0; y < side; ++y) {
-        const auto* source = view.pixels + static_cast<size_t>(top + y) * static_cast<size_t>(view.rowPitch)
-            + static_cast<size_t>(left) * 4;
+        const auto* source = view.pixels + static_cast<size_t>(localTop + y) * static_cast<size_t>(view.rowPitch)
+            + static_cast<size_t>(localLeft) * 4;
         std::copy_n(source, image.stride,
             image.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(image.stride));
     }
@@ -142,9 +171,28 @@ bool WriteQteScopeSnapshot(const FrameView& view, const AppConfig& config, const
     }
     return SaveBmpWic(path, image, error);
 }
+
+RECT MakeQteCaptureRegion(const AppConfig& config) {
+    const std::int64_t padding = std::max(8, config.ringThickness / 2 + 4);
+    const std::int64_t extent = static_cast<std::int64_t>(config.radius) + padding;
+    const std::int64_t left = std::min(static_cast<std::int64_t>(config.centerX) - extent,
+        static_cast<std::int64_t>(config.centerRoiX));
+    const std::int64_t top = std::min(static_cast<std::int64_t>(config.centerY) - extent,
+        static_cast<std::int64_t>(config.centerRoiY));
+    const std::int64_t right = std::max(static_cast<std::int64_t>(config.centerX) + extent + 1,
+        static_cast<std::int64_t>(config.centerRoiX) + config.centerRoiWidth);
+    const std::int64_t bottom = std::max(static_cast<std::int64_t>(config.centerY) + extent + 1,
+        static_cast<std::int64_t>(config.centerRoiY) + config.centerRoiHeight);
+    const auto toLong = [](std::int64_t value) {
+        return static_cast<LONG>(std::clamp(value,
+            static_cast<std::int64_t>(std::numeric_limits<LONG>::min()),
+            static_cast<std::int64_t>(std::numeric_limits<LONG>::max())));
+    };
+    return RECT{ toLong(left), toLong(top), toLong(right), toLong(bottom) };
+}
 }
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(comResult)) {
         ShowFatalError(HrText(L"COM initialization failed", comResult));
@@ -153,6 +201,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     AppConfig config{};
     std::wstring error;
+    const bool captureOnlyMode = commandLine != nullptr
+        && std::wstring_view(commandLine).find(L"--capture-only") != std::wstring_view::npos;
+    const CaptureStage captureStage = captureOnlyMode ? GetCaptureStage(commandLine) : CaptureStage::Full;
     const std::wstring configPath = GetConfigPath();
     if (!LoadConfig(configPath, config, error)) {
         ShowFatalError(error);
@@ -164,6 +215,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     EventLogger logger(appDirectory / L"qtevision.log");
     logger.Write(L"QTE Vision started; target key=" + config.targetKey
         + L", trigger_offset_deg=" + std::to_wstring(config.triggerOffsetDegrees));
+    if (captureOnlyMode) {
+        logger.Write(L"Capture-only diagnostic mode; QTE detection and keyboard input disabled");
+        logger.Write(L"Capture diagnostic stage: " + std::wstring(CaptureStageName(captureStage)));
+        logger.Write(L"Capture attempts use the original uncapped loop cadence");
+    }
 
     QteDetector detector(config);
     const std::wstring referencePath = (appDirectory / L"reference.bmp").wstring();
@@ -185,7 +241,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
 
     DxgiCapture capture;
-    if (!capture.Initialize(config.monitorIndex, error)) {
+    const RECT qteCaptureRegion = MakeQteCaptureRegion(config);
+    if (!capture.Initialize(config.monitorIndex, error, captureOnlyMode ? nullptr : &qteCaptureRegion)) {
         ShowFatalError(error);
         CoUninitialize();
         return 1;
@@ -201,6 +258,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     int validatedWidth = 0;
     int validatedHeight = 0;
     const WORD targetVirtualKey = TargetVirtualKey(config.targetKey);
+    auto captureRateLogStart = std::chrono::steady_clock::now();
+    unsigned int capturedFramesInLogInterval = 0;
     window.Update(programEnabled, latestStats);
 
     while (!window.ShouldExit()) {
@@ -228,14 +287,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
         FrameView frame{};
         HRESULT captureHr = S_OK;
-        const CaptureStatus captureStatus = capture.BeginFrame(frame, captureHr, error);
+        const CaptureStatus captureStatus = capture.BeginFrame(frame, captureHr, error,
+            captureOnlyMode ? captureStage : CaptureStage::Full);
         if (captureStatus == CaptureStatus::Failed) {
             const std::wstring failure = error.empty() ? HrText(L"Desktop capture failed", captureHr) : error;
             ShowFatalError(failure);
             logger.Write(failure);
             break;
         }
-        if (captureStatus == CaptureStatus::Reinitialized) logger.Write(L"Display capture restarted after an output change");
+        if (captureStatus == CaptureStatus::Reinitialized) {
+            validatedWidth = 0;
+            validatedHeight = 0;
+            logger.Write(L"Display capture restarted after an output change");
+        }
         if (captureStatus != CaptureStatus::Frame) {
             if (captureStatus == CaptureStatus::Timeout) MsgWaitForMultipleObjectsEx(0, nullptr, 1, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             continue;
@@ -255,7 +319,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             continue;
         }
 
-        if (frame.width != validatedWidth || frame.height != validatedHeight) {
+        if (!captureOnlyMode && (frame.width != validatedWidth || frame.height != validatedHeight)) {
             if (!detector.ValidateFrame(frame, error)) {
                 ShowFatalError(error);
                 logger.Write(error);
@@ -264,6 +328,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             }
             validatedWidth = frame.width;
             validatedHeight = frame.height;
+        }
+
+        if (captureOnlyMode) {
+            ++capturedFramesInLogInterval;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - captureRateLogStart >= std::chrono::seconds(1)) {
+                logger.Write(L"Capture-only measured frame rate: "
+                    + std::to_wstring(capturedFramesInLogInterval) + L" fps");
+                capturedFramesInLogInterval = 0;
+                captureRateLogStart = now;
+            }
+            capture.EndFrame();
+            continue;
         }
 
         if (saveReferenceRequested) {
