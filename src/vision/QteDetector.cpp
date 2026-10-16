@@ -234,6 +234,9 @@ QteStats QteDetector::Process(const FrameView& frame) {
 
     if (!stats.qteDetected) {
         ResetState();
+        stats.qteState = qteState_;
+        stats.visionTimeMs = ElapsedMs(totalStart, QpcNow());
+        return stats;
     } else if (qteState_ == QteState::WaitingQte) {
         qteState_ = QteState::DetectingPerfect;
     }
